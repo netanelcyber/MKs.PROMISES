@@ -201,9 +201,9 @@ final class BillsLoader {
 
     private String fetchPage(Meta m) throws IOException, InterruptedException {
         String url = base + "KNS_Bill?$skip=" + m.nextSkip + "&$top=" + PAGE
-                + (m.noOrder ? "" : "&$orderby=BillID")
+                + (m.noOrder ? "" : "&$orderby=Id")
                 + (m.knesset > 0 ? "&$filter=KnessetNum%20eq%20" + m.knesset : "")
-                + "&$select=BillID,KnessetNum,Name,SubTypeDesc";
+                + "&$select=Id,KnessetNum,Name,SubTypeDesc";
         IOException last = null;
         for (int t = 0; t < TRIES; t++) {
             if (stop) {
