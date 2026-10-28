@@ -83,7 +83,7 @@ var view={name:'list'};
 var F={q:'',faction:'',onlyNew:false};
 var bills=Object.create(null); // mkId -> loaded bills
 var apiFailure=null; // Temporary diagnostics only; never part of saved records or backups.
-var API_ACTIONS=['members','bills','committees','allbills','initiators'];
+var API_ACTIONS=['members','bills','committees','allbills','initiators','laws'];
 
 function uid(){return Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-4)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]})}
@@ -360,7 +360,7 @@ function reportApiError(action,error,context){
 }
 function renderApiFailure(){
   var failure=apiFailure;if(!failure)return'';
-  var title={bills:'טעינת הצעות החוק נכשלה',committees:'טעינת הוועדות נכשלה',allbills:'טעינת כל הצעות החוק נכשלה',initiators:'טעינת יוזמי הצעות החוק נכשלה'}[failure.action]||'טעינת חברי הכנסת נכשלה';
+  var title={bills:'טעינת הצעות החוק נכשלה',committees:'טעינת הוועדות נכשלה',allbills:'טעינת כל הצעות החוק נכשלה',initiators:'טעינת יוזמי הצעות החוק נכשלה',laws:'טעינת חוקי ישראל נכשלה'}[failure.action]||'טעינת חברי הכנסת נכשלה';
   var canRetry=failure.action==='members'?recoveryBackup===null:failure.action==='bills'?!!mk(failure.context.id):true;
   var h='<section class="card api-error" id="apiFailure" role="alert" aria-labelledby="apiFailureTitle"><h3 id="apiFailureTitle">'+title+'</h3>'
     +'<div class="mute">'+(failure.entity?'מאגר: <span dir="ltr">'+esc(failure.entity)+'</span> · ':'')+(failure.status?'<span dir="ltr">HTTP '+failure.status+'</span>':'לא התקבלה תשובת HTTP תקינה')+'</div>'
@@ -388,6 +388,7 @@ function retryApiFailure(){
   if(failure.action==='committees'){clearApiFailure();return loadCommittees()}
   if(failure.action==='allbills'){clearApiFailure();var saved=bl();return loadAllBills(saved?saved.knesset:25,false)}
   if(failure.action==='initiators'){clearApiFailure();return loadAllInitiators(false)}
+  if(failure.action==='laws'){clearApiFailure();var savedLw=lw();return loadAllLaws(savedLw?savedLw.knesset:25,false)}
   clearApiFailure();return loadMembers(failure.context.k);
 }
 
@@ -735,6 +736,8 @@ var BKEY='mk-promises-bills-v1',BL_MAX_SKIP=300000,BL_DELAY=120;
 var BL=null,blReady=false,blRun=false,blStop=false,BQ='';
 var IKEY='mk-promises-initiators-v1',INI_MAX_SKIP=500000,INI_DELAY=120;
 var INI=null,iniReady=false,iniRun=false,iniStop=false;
+var LKEY='mk-promises-laws-v1',LW_MAX_SKIP=300000,LW_DELAY=120;
+var LW=null,lwReady=false,lwRun=false,lwStop=false,LQ='';
 function isNativeBills(){return!!(window.Android&&window.Android.startBills)}
 function blRead(){
   try{
@@ -972,14 +975,133 @@ function renderInitiators(){
    +'</div><div class="mute" style="margin-top:8px">הטעינה מביאה את טבלת KNS_BillInitiator (שיוך הצעת חוק ליוזם) ב-100 שורות לכל בקשה. הנתונים נשמרים במכשיר.</div></div>';
   return h;
 }
+/* ---------- laws (KNS_IsraelLaw) ---------- */
+function isNativeLaws(){return!!(window.Android&&window.Android.startLaws)}
+function lwRead_ls(){
+  try{
+    var raw=localStorage.getItem(LKEY);if(raw===null)return null;
+    var o=JSON.parse(raw);
+    if(!o||typeof o!=='object'||!Array.isArray(o.rows)||!Number.isSafeInteger(o.nextSkip)||o.nextSkip<0||!Number.isSafeInteger(o.knesset)||o.knesset<0)return null;
+    return o;
+  }catch(e){return null}
+}
+function nlMeta(){try{var t=window.Android.lawsMeta();return t?JSON.parse(t):null}catch(e){return null}}
+function nlRows(skip){
+  try{
+    var t=window.Android.lawsPage(skip);if(!t)return[];
+    return(JSON.parse(t).value||[]).filter(function(r){return r&&apiId(r.Id)}).map(function(r){return{i:apiId(r.Id),k:r.KnessetNum,n:typeof r.Name==='string'?r.Name:'',basic:r.IsBasicLaw===true,budget:r.IsBudgetLaw===true,pub:typeof r.PublicationDate==='string'?r.PublicationDate.slice(0,10):'',validity:typeof r.LawValidityDesc==='string'?r.LawValidityDesc:''}});
+  }catch(e){return[]}
+}
+function nlRead(){
+  var m=nlMeta();if(!m||!Number.isSafeInteger(m.nextSkip)||m.nextSkip<0)return null;
+  var rows=[],seen={};
+  for(var s=0;s<m.nextSkip;s+=100)nlRows(s).forEach(function(r){if(!seen[r.i]){seen[r.i]=1;rows.push(r)}});
+  return{knesset:Number(m.knesset)||0,rows:rows,nextSkip:m.nextSkip,done:m.done===true,loadedAt:typeof m.loadedAt==='string'?m.loadedAt:''};
+}
+function lw(){if(!lwReady){LW=isNativeLaws()?nlRead():lwRead_ls();lwReady=true}return LW}
+function lwSave(){
+  if(isNativeLaws()||!LW)return true;
+  try{localStorage.setItem(LKEY,JSON.stringify(LW));return true}
+  catch(e){toast('אין מקום לשמור את החוקים במכשיר');return false}
+}
+function lwProgress(){var el=document.getElementById('lwProg'),d=lw();if(el&&d)el.textContent=lwRun?'נטענו '+d.rows.length+' חוקים · $skip='+d.nextSkip:''}
+window.__lawsNative=function(state,skip,msg){
+  var d=lw();if(!d||typeof skip!=='number')return;
+  if(state==='progress'){
+    if(!lwRun){lwRun=true;render()}
+    var seen={};d.rows.forEach(function(r){seen[r.i]=1});
+    nlRows(skip).forEach(function(r){if(!seen[r.i]){seen[r.i]=1;d.rows.push(r)}});
+    d.nextSkip=skip+100;lwProgress();return;
+  }
+  lwRun=false;var again=nlRead();if(again)LW=again;
+  if(apiFailure&&apiFailure.action==='laws'&&state==='done')apiFailure=null;
+  if(state==='error')reportApiError('laws',{message:'טעינת חוקי ישראל נכשלה: '+String(msg||'').slice(0,300)});else render();
+  var n=LW?LW.rows.length:0;
+  if(state==='done')toast('נטענו '+n+' חוקים');
+  else if(state==='stopped')toast('הטעינה נעצרה אחרי '+n+' חוקים. אפשר להמשיך');
+};
+function nativeLaws(knesset,fresh){
+  var current=lw(),restart=!!fresh||!current||current.knesset!==knesset;
+  var started=false;try{started=window.Android.startLaws(knesset,restart)===true}catch(e){}
+  if(!started){toast('הטעינה כבר רצה או שלא ניתן להפעיל אותה');return}
+  var d=LW=restart?{knesset:knesset,rows:[],nextSkip:0,done:false,loadedAt:''}:current;
+  lwRun=true;d.done=false;render();lwProgress();
+}
+function lawsUrl(d,ordered){
+  return BASE+'KNS_IsraelLaw?$skip='+d.nextSkip+'&$top=100'+(ordered?'&$orderby=Id':'')+(d.knesset?'&$filter=KnessetNum eq '+d.knesset:'')+'&$select=Id,KnessetNum,Name,IsBasicLaw,IsBudgetLaw,PublicationDate,LawValidityDesc';
+}
+function loadAllLaws(knesset,fresh){
+  if(lwRun)return Promise.resolve();
+  knesset=Number(knesset)||0;
+  if(isNativeLaws()){nativeLaws(knesset,fresh);return Promise.resolve()}
+  var d=lw();
+  if(fresh||!d||d.knesset!==knesset)LW=d={knesset:knesset,rows:[],nextSkip:0,done:false,loadedAt:''};
+  var seen={},ordered=true;d.rows.forEach(function(r){seen[r.i]=1});
+  lwRun=true;lwStop=false;d.done=false;render();lwProgress();
+  return new Promise(function(resolve){
+    function end(message,failure){
+      lwRun=false;d.loadedAt=new Date().toISOString();
+      if(LW===d)lwSave();
+      render();if(failure)reportApiError('laws',failure);else toast(message);
+      resolve();
+    }
+    function step(){
+      if(LW!==d)return end('הטעינה בוטלה');
+      if(lwStop)return end('הטעינה נעצרה אחרי '+d.rows.length+' חוקים. אפשר להמשיך');
+      if(d.nextSkip>=LW_MAX_SKIP)return end('עצירת ביטחון ב-'+LW_MAX_SKIP+' שורות');
+      return getJson(lawsUrl(d,ordered)).then(function(j){
+        if(j.value.length){
+          j.value.forEach(function(r){
+            var id=r&&apiId(r.Id);if(!id)throw new Error('מזהה לא תקין בחוק');
+            if(!seen[id]){seen[id]=1;d.rows.push({i:id,k:r.KnessetNum,n:typeof r.Name==='string'?r.Name:'',basic:r.IsBasicLaw===true,budget:r.IsBudgetLaw===true,pub:typeof r.PublicationDate==='string'?r.PublicationDate.slice(0,10):'',validity:typeof r.LawValidityDesc==='string'?r.LawValidityDesc:''})}
+          });
+        }
+        if(!j.value.length){d.done=true;return end('נטענו '+d.rows.length+' חוקים')}
+        d.nextSkip+=100;
+        if(d.nextSkip%1000===0)lwSave();
+        lwProgress();
+        return new Promise(function(r){setTimeout(r,LW_DELAY)}).then(step);
+      }).catch(function(e){
+        if(ordered&&d.nextSkip===0&&!d.rows.length&&e&&e.status>=400&&e.status<500){ordered=false;return step()}
+        end('',e);
+      });
+    }
+    step();
+  });
+}
+function startLaws(){
+  return ask('טעינת חוקי ישראל',[{k:'k',label:'מספר כנסת (ריק = כל הכנסות)',type:'number',value:25}],'התחל').then(function(o){
+    if(!o)return;var k=o.k===''?0:Number(o.k);
+    if(!Number.isSafeInteger(k)||k<0||k>99){toast('מספר הכנסת אינו תקין');return}
+    return loadAllLaws(k,true);
+  });
+}
+function renderLaws(){
+  var d=lw();
+  var h='<div class="card"><div class="mute">'+(d?((d.knesset?'הכנסת ה-'+esc(d.knesset):'כל הכנסות')+' · '+d.rows.length+' חוקים'+(d.done?'':' · הטעינה לא הושלמה, נקודת המשך $skip='+d.nextSkip)+(d.loadedAt?' · נטען '+esc(d.loadedAt.slice(0,16).replace('T',' ')):'')):'עדיין לא נטענו חוקי ישראל')+'</div>'
+   +'<div id="lwProg" class="mute"></div><div class="row" style="margin-top:8px">'
+   +(lwRun?'<button class="pri" data-a="stopLaws">עצירה</button>':'<button class="pri" data-a="loadAllLaws">'+(d&&!d.done?'המשך טעינה':'טעינת חוקי ישראל')+'</button>'+(d?'<button class="sec" data-a="freshLaws">טעינה מחדש / כנסת אחרת</button>':''))
+   +'</div><div class="mute" style="margin-top:8px">הטעינה מביאה את טבלת KNS_IsraelLaw (חוקי מדינת ישראל) ב-100 שורות לכל בקשה. החוקים נשמרים במכשיר ולא נכללים בגיבוי.</div></div>';
+  if(d&&d.rows.length)h+='<input id="lq" type="search" placeholder="חיפוש בשם החוק" value="'+esc(LQ)+'"><div id="lwItems" style="margin-top:12px"></div>';
+  return h;
+}
+function renderLawItems(){
+  var el=document.getElementById('lwItems'),d=lw();if(!el||!d)return;
+  var q=LQ.trim().toLowerCase(),list=q?d.rows.filter(function(x){return x.n.toLowerCase().indexOf(q)>=0}):d.rows;
+  el.innerHTML='<p class="mute">'+list.length+' תוצאות'+(list.length>50?' · מוצגות 50 הראשונות':'')+'</p>'+list.slice(0,50).map(function(x){
+    return'<div class="card"><div>'+esc(x.n)+'</div><div class="mute">הכנסת ה-'+esc(x.k)+(x.basic?' · חוק יסוד':'')+(x.budget?' · חוק תקציב':'')+(x.pub?' · '+esc(x.pub):'')+(x.validity?' · '+esc(x.validity):'')+'</div><button class="lnk" data-a="lawAssign" data-b="'+esc(x.i)+'">שיוך להבטחה</button></div>';
+  }).join('');
+}
 function wipeCaches(){
-  blStop=true;iniStop=true;
+  blStop=true;iniStop=true;lwStop=true;
   try{localStorage.removeItem(BKEY)}catch(e){}
   try{localStorage.removeItem(IKEY)}catch(e){}
+  try{localStorage.removeItem(LKEY)}catch(e){}
   try{localStorage.removeItem(CMT_KEY)}catch(e){}
   try{if(window.Android&&window.Android.wipeBills)window.Android.wipeBills()}catch(e){}
   try{if(window.Android&&window.Android.wipeInitiators)window.Android.wipeInitiators()}catch(e){}
-  BL=null;blReady=true;blRun=false;BQ='';INI=null;iniReady=true;iniRun=false;CM=null;cmReady=true;
+  try{if(window.Android&&window.Android.wipeLaws)window.Android.wipeLaws()}catch(e){}
+  BL=null;blReady=true;blRun=false;BQ='';INI=null;iniReady=true;iniRun=false;LW=null;lwReady=true;lwRun=false;LQ='';CM=null;cmReady=true;
 }
 function assignEvidence(options,title,type,url){
   var promiseOptions=options.map(function(x){return[x.key,x.label]});
@@ -1011,6 +1133,7 @@ function render(){
   else if(view.name==='cmts'){back.hidden=false;title.textContent='ועדות הכנסת ה-25';app.innerHTML=renderApiFailure()+renderCmts()}
   else if(view.name==='cmt'&&cm()){back.hidden=false;title.textContent=cmtName(view.id);app.innerHTML=renderApiFailure()+renderCmt(view.id)}
   else if(view.name==='bills'){back.hidden=false;title.textContent='כל הצעות החוק';app.innerHTML=renderApiFailure()+renderBills()+renderInitiators();renderBillItems();blProgress();iniProgress()}
+  else if(view.name==='laws'){back.hidden=false;title.textContent='חוקי ישראל';app.innerHTML=renderApiFailure()+renderLaws();renderLawItems();lwProgress()}
   else{view={name:'list'};back.hidden=true;title.textContent='מעקב הבטחות';app.innerHTML=renderApiFailure()+renderListShell();renderItems()}
 }
 function renderListShell(){
@@ -1018,7 +1141,7 @@ function renderListShell(){
   if(F.faction&&factions.indexOf(F.faction)<0)F.faction='';
   var disabled=recoveryBackup!==null?' disabled':'';
   var h=(loadWarning?'<div class="card" role="alert">'+esc(loadWarning)+'</div>':'')
-    +'<div class="row" style="margin-bottom:12px"><button class="pri" data-a="addMk"'+disabled+'>+ הוספת ח"כ</button><button class="sec" data-a="loadMembers"'+disabled+'>טעינה מהכנסת (ה-25)</button><button class="sec" data-a="openCmts">ועדות הכנסת ה-25</button><button class="sec" data-a="openBills">כל הצעות החוק</button></div>';
+    +'<div class="row" style="margin-bottom:12px"><button class="pri" data-a="addMk"'+disabled+'>+ הוספת ח"כ</button><button class="sec" data-a="loadMembers"'+disabled+'>טעינה מהכנסת (ה-25)</button><button class="sec" data-a="openCmts">ועדות הכנסת ה-25</button><button class="sec" data-a="openBills">כל הצעות החוק</button><button class="sec" data-a="openLaws">חוקי ישראל</button></div>';
   if(S.mks.length){
     h+='<div class="card"><input id="q" type="search" placeholder="חיפוש לפי שם" value="'+esc(F.q)+'">'
      +'<div class="row" style="margin-top:8px"><select id="fac" class="grow"><option value="">כל הסיעות</option>'+factions.map(function(f){return'<option'+(F.faction===f?' selected':'')+'>'+esc(f)+'</option>'}).join('')+'</select>'
@@ -1102,6 +1225,16 @@ var A={
   loadAllInitiators:function(){clearApiFailure('initiators');var d=ini();if(d&&!d.done)loadAllInitiators(false);else loadAllInitiators(true)},
   freshInitiators:function(){clearApiFailure('initiators');loadAllInitiators(true)},
   stopInitiators:function(){if(isNativeInitiators()){try{window.Android.stopInitiators()}catch(e){}}else iniStop=true},
+  openLaws:function(){view={name:'laws'};render();window.scrollTo(0,0)},
+  loadAllLaws:function(){clearApiFailure('laws');var d=lw();if(d&&!d.done)loadAllLaws(d.knesset,false);else startLaws()},
+  freshLaws:function(){clearApiFailure('laws');startLaws()},
+  stopLaws:function(){if(isNativeLaws()){try{window.Android.stopLaws()}catch(e){}}else lwStop=true},
+  lawAssign:function(d){
+    var dd=lw(),row=dd&&dd.rows.find(function(x){return String(x.i)===d.b});if(!row)return;
+    var options=[];S.mks.forEach(function(m){m.promises.forEach(function(p){options.push({key:m.id+'|'+p.id,label:(m.name+': '+p.text).slice(0,90),member:m,promise:p})})});
+    if(!options.length){toast('קודם הוסיפו הבטחה לחבר כנסת');return}
+    assignEvidence(options,row.n||('חוק '+row.i),'חוק',BASE+'KNS_IsraelLaw('+row.i+')');
+  },
   billAssign:function(d){
     var b=bl(),row=b&&b.rows.find(function(x){return String(x.i)===d.b});if(!row)return;
     var options=[];S.mks.forEach(function(m){m.promises.forEach(function(p){options.push({key:m.id+'|'+p.id,label:(m.name+': '+p.text).slice(0,90),member:m,promise:p})})});
@@ -1171,10 +1304,10 @@ document.addEventListener('click',function(ev){var t=ev.target.closest('[data-a]
 document.addEventListener('change',function(ev){var t=ev.target;
   if(t.dataset&&t.dataset.a==='status'){var p=mk(t.dataset.id).promises.find(function(x){return x.id===t.dataset.p});p.status=t.value;save();render();return}
   if(t.id==='fac'){F.faction=t.value;renderItems()}if(t.id==='onlyNew'){F.onlyNew=t.checked;renderItems()}});
-document.addEventListener('input',function(ev){if(ev.target.id==='q'){F.q=ev.target.value;renderItems()}if(ev.target.id==='bq'){BQ=ev.target.value;renderBillItems()}});
+document.addEventListener('input',function(ev){if(ev.target.id==='q'){F.q=ev.target.value;renderItems()}if(ev.target.id==='bq'){BQ=ev.target.value;renderBillItems()}if(ev.target.id==='lq'){LQ=ev.target.value;renderLawItems()}});
 function navigateBack(){
   if(view.name==='cmt'){view={name:'cmts'};render();return true}
-  if(view.name==='mk'||view.name==='cmts'||view.name==='bills'){view={name:'list'};render();return true}
+  if(view.name==='mk'||view.name==='cmts'||view.name==='bills'||view.name==='laws'){view={name:'list'};render();return true}
   return false;
 }
 document.getElementById('backBtn').addEventListener('click',function(){if(!navigateBack()){view={name:'list'};render()}});

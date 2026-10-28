@@ -31,6 +31,7 @@ public class MainActivity extends Activity {
     private WebView web;
     private BillsLoader bills;
     private InitiatorsLoader initiators;
+    private LawsLoader laws;
 
     /**
      * Quotes a string as a JavaScript string literal that is also safe inside an inline script.
@@ -77,6 +78,11 @@ public class MainActivity extends Activity {
         initiators = new InitiatorsLoader(new File(getFilesDir(), "initiators"), KNESSET_ODATA, (state, skip, msg) ->
                 runOnUiThread(() -> web.evaluateJavascript(
                         "window.__initiatorsNative&&window.__initiatorsNative(" + jsq(state) + "," + skip + "," + jsq(msg) + ")", null)));
+
+        // The $skip loop over KNS_IsraelLaw (enacted laws) also runs in Java.
+        laws = new LawsLoader(new File(getFilesDir(), "laws"), KNESSET_ODATA, (state, skip, msg) ->
+                runOnUiThread(() -> web.evaluateJavascript(
+                        "window.__lawsNative&&window.__lawsNative(" + jsq(state) + "," + skip + "," + jsq(msg) + ")", null)));
 
         web.addJavascriptInterface(new Bridge(), "Android");
         web.setWebViewClient(new WebViewClient() {
@@ -291,6 +297,31 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void wipeInitiators() {
             initiators.wipe();
+        }
+
+        @JavascriptInterface
+        public boolean startLaws(int knesset, boolean fresh) {
+            return laws.start(knesset, fresh);
+        }
+
+        @JavascriptInterface
+        public void stopLaws() {
+            laws.stop();
+        }
+
+        @JavascriptInterface
+        public String lawsMeta() {
+            return laws.meta();
+        }
+
+        @JavascriptInterface
+        public String lawsPage(int skip) {
+            return laws.page(skip);
+        }
+
+        @JavascriptInterface
+        public void wipeLaws() {
+            laws.wipe();
         }
 
         /** Opens the system share sheet with plain text (used for data export). */

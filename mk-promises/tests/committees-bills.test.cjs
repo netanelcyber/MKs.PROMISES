@@ -7,7 +7,7 @@ const path=require('node:path');
 const vm=require('node:vm');
 const scoring=require('../web/promise-scoring.js');
 const source=fs.readFileSync(path.join(__dirname,'../web/index.html'),'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
-const KEY='mk-promises-v1',CMT_KEY='mk-promises-committees-v1',BKEY='mk-promises-bills-v1',IKEY='mk-promises-initiators-v1';
+const KEY='mk-promises-v1',CMT_KEY='mk-promises-committees-v1',BKEY='mk-promises-bills-v1',IKEY='mk-promises-initiators-v1',LKEY='mk-promises-laws-v1';
 const BASE='https://knesset.gov.il/OdataV4/ParliamentInfo/';
 const clone=value=>JSON.parse(JSON.stringify(value));
 const fixture=()=>({v:1,mks:[{id:'m1',name:'חבר כנסת לבדיקה',faction:'סיעה',knesset:'25',isNew:false,apiPersonId:123,
@@ -45,7 +45,7 @@ function app(options={}){
       }
     }
   }
-  const nodes=Object.fromEntries(['app','items','title','backBtn','toast','apiFailure','blProg','blItems','iniProg'].map(id=>[id,new Element(id)]));
+  const nodes=Object.fromEntries(['app','items','title','backBtn','toast','apiFailure','blProg','blItems','iniProg','lwProg','lwItems'].map(id=>[id,new Element(id)]));
   nodes.dlgForm=new Form('dlgForm');nodes.dlg=Object.assign(new Element('dlg'),{open:false,onclose:null,
     showModal(){assert.equal(this.open,false);this.open=true},close(){if(!this.open)return;this.open=false;state.tasks.push(()=>{if(this.onclose)this.onclose()})}});
   const document={activeElement:null,getElementById(id){
@@ -60,7 +60,7 @@ function app(options={}){
     fetch(url,config){state.fetches.push(url);return Promise.resolve(options.route?options.route(new URL(url),config,h):reply({value:[]}))},
     console:{log(...args){state.logs.push(args)},warn(...args){state.logs.push(args)},error(...args){state.logs.push(args)}}
   };
-  const hook='window.__t={state:function(){return S},normalize:normalizeState,bl:bl,cm:cm,ini:ini,failure:function(){return apiFailure},busy:function(){return blRun||iniRun||cmLoading},view:function(){return view}};';
+  const hook='window.__t={state:function(){return S},normalize:normalizeState,bl:bl,cm:cm,ini:ini,lw:lw,failure:function(){return apiFailure},busy:function(){return blRun||iniRun||lwRun||cmLoading},view:function(){return view}};';
   const instrumented=source.replace(/\}\)\(\);\s*$/,hook+'\n})();');assert.notEqual(instrumented,source);
   vm.runInNewContext(instrumented,context,{filename:'index.html'});
   const h={state,storage,nodes,window,hooks:window.__t,record(){return clone(window.__t.state())},failure(){return clone(window.__t.failure())},html(){return nodes.app.innerHTML}};
@@ -341,19 +341,58 @@ test('on Android an initiators error is shown with diagnostics',async()=>{
   assert.equal(h.failure().action,'initiators');assert.match(h.failure().message,/503/);
 });
 
+/* ---------- all laws: Android loop in Java ---------- */
+
+function androidLaws(){
+  const calls={start:[],stop:0,wipe:0};const pages={};let meta='';let running=false;
+  return {calls,pages,setMeta(value){meta=value},setRunning(value){running=value},api:{
+    startLaws(knesset,fresh){calls.start.push([knesset,fresh]);return !running},stopLaws(){calls.stop++},lawsMeta(){return meta},lawsPage(skip){return pages[skip]||''},wipeLaws(){calls.wipe++}}};
+}
+const lawRow=(id,knesset,name,basic,budget)=>({Id:id,KnessetNum:knesset,Name:name||'חוק '+id,IsBasicLaw:!!basic,IsBudgetLaw:!!budget,PublicationDate:'2024-01-01T00:00:00',LawValidityDesc:'תקף'});
+const lwPage=(from,count)=>JSON.stringify({value:Array.from({length:count},(_,i)=>lawRow(from+i,25))});
+
+test('on Android the laws loop delegates to Java and reads saved pages through the bridge',async()=>{
+  const nb=androidBills();const nl=androidLaws();
+  const h=app({android:{...nb.api,...nl.api,shareText(t){}}});
+  h.click('openLaws');
+  h.click('loadAllLaws');await h.flush();h.submit({k:'25'});await h.flush();
+  assert.deepEqual(nl.calls.start,[[25,true]]);
+  nl.pages[0]=lwPage(1,100);h.window.__lawsNative('progress',0,'');
+  assert.equal(h.hooks.lw().rows.length,100);assert.equal(h.hooks.lw().nextSkip,100);
+  nl.pages[100]=lwPage(101,50);h.window.__lawsNative('progress',100,'');
+  assert.equal(h.hooks.lw().rows.length,150);
+  nl.setMeta(JSON.stringify({knesset:25,nextSkip:200,done:true,loadedAt:'2026-10-28T10:00:00Z'}));h.window.__lawsNative('done',200,'');
+  assert.equal(h.hooks.lw().rows.length,150);assert.equal(h.hooks.lw().done,true);
+  assert.match(h.nodes.toast.textContent,/150/);
+  assert.equal(h.storage.has(LKEY),false,'Java keeps the pages; nothing large goes to localStorage');
+  h.click('stopLaws');assert.equal(nl.calls.stop,1);
+});
+
+test('on Android a laws error is shown with diagnostics',async()=>{
+  const nb=androidBills();const nl=androidLaws();
+  nl.setRunning(true);
+  const h=app({android:{...nb.api,...nl.api,shareText(t){}}});
+  h.click('openLaws');h.click('loadAllLaws');await h.flush();h.submit({k:'25'});await h.flush();
+  assert.match(h.nodes.toast.textContent,/כבר רצה/);
+  nl.setRunning(false);h.click('loadAllLaws');await h.flush();h.submit({k:'25'});await h.flush();
+  nl.setMeta(JSON.stringify({knesset:25,nextSkip:0,done:false,loadedAt:''}));h.window.__lawsNative('error',0,'HTTP 503');
+  assert.equal(h.failure().action,'laws');assert.match(h.failure().message,/503/);
+});
+
 /* ---------- wipe and navigation ---------- */
 
 test('wiping all data also clears the local bills and committee caches, including Java storage',async()=>{
-  const nb=androidBills();const ni=androidInitiators();
-  const h=app({android:{...nb.api,...ni.api,shareText(t){}},storage:{[CMT_KEY]:{win:{from:'2026-04-27',to:'2026-10-27'},committees:[],sessions:[],roles:[]},[BKEY]:{knesset:25,rows:[],nextSkip:0,done:false,loadedAt:''}}});
+  const nb=androidBills();const ni=androidInitiators();const nl=androidLaws();
+  const h=app({android:{...nb.api,...ni.api,...nl.api,shareText(t){}},storage:{[CMT_KEY]:{win:{from:'2026-04-27',to:'2026-10-27'},committees:[],sessions:[],roles:[]},[BKEY]:{knesset:25,rows:[],nextSkip:0,done:false,loadedAt:''}}});
   h.click('menu');h.submit({act:'wipe'});await h.flush();h.submit({});await h.flush();
-  assert.deepEqual(h.record(),{v:1,mks:[]});assert.equal(h.storage.has(CMT_KEY),false);assert.equal(h.storage.has(BKEY),false);assert.equal(h.storage.has(IKEY),false);assert.equal(nb.calls.wipe,1);assert.equal(ni.calls.wipe,1);
-  assert.equal(h.hooks.cm(),null);assert.equal(h.hooks.bl(),null);assert.equal(h.hooks.ini(),null);
+  assert.deepEqual(h.record(),{v:1,mks:[]});assert.equal(h.storage.has(CMT_KEY),false);assert.equal(h.storage.has(BKEY),false);assert.equal(h.storage.has(IKEY),false);assert.equal(h.storage.has(LKEY),false);assert.equal(nb.calls.wipe,1);assert.equal(ni.calls.wipe,1);assert.equal(nl.calls.wipe,1);
+  assert.equal(h.hooks.cm(),null);assert.equal(h.hooks.bl(),null);assert.equal(h.hooks.ini(),null);assert.equal(h.hooks.lw(),null);
 });
 
-test('the back button leaves the committee, committees and bills screens one level at a time',()=>{
+test('the back button leaves the committee, committees, bills and laws screens one level at a time',()=>{
   const h=app({route:committeeRoute([])});
   h.click('openBills');assert.equal(h.hooks.view().name,'bills');h.window.__back();assert.equal(h.hooks.view().name,'list');
   assert.equal(h.nodes.backBtn.hidden,true);
+  h.click('openLaws');assert.equal(h.hooks.view().name,'laws');h.window.__back();assert.equal(h.hooks.view().name,'list');
   h.click('openCmts');assert.equal(h.nodes.backBtn.hidden,false);h.nodes.backBtn.listeners.click();assert.equal(h.hooks.view().name,'list');
 });
