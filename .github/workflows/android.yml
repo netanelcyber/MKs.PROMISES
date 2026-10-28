@@ -26,11 +26,11 @@ jobs:
           gradle-version: '8.9'
 
       - name: Build debug APK
-        working-directory: android
+        working-directory: mk-promises/android
         run: gradle assembleDebug --no-daemon
 
       - name: Name the APK
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk mk-promises.apk
+        run: cp mk-promises/android/app/build/outputs/apk/debug/app-debug.apk mk-promises.apk
 
       - name: Publish APK as a release
         uses: softprops/action-gh-release@v2
