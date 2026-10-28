@@ -30,6 +30,7 @@ public class MainActivity extends Activity {
 
     private WebView web;
     private BillsLoader bills;
+    private InitiatorsLoader initiators;
 
     /**
      * Quotes a string as a JavaScript string literal that is also safe inside an inline script.
@@ -71,6 +72,11 @@ public class MainActivity extends Activity {
         bills = new BillsLoader(new File(getFilesDir(), "bills"), KNESSET_ODATA, (state, skip, msg) ->
                 runOnUiThread(() -> web.evaluateJavascript(
                         "window.__billsNative&&window.__billsNative(" + jsq(state) + "," + skip + "," + jsq(msg) + ")", null)));
+
+        // The $skip loop over KNS_BillInitiator (bill→MK initiator mapping) also runs in Java.
+        initiators = new InitiatorsLoader(new File(getFilesDir(), "initiators"), KNESSET_ODATA, (state, skip, msg) ->
+                runOnUiThread(() -> web.evaluateJavascript(
+                        "window.__initiatorsNative&&window.__initiatorsNative(" + jsq(state) + "," + skip + "," + jsq(msg) + ")", null)));
 
         web.addJavascriptInterface(new Bridge(), "Android");
         web.setWebViewClient(new WebViewClient() {
@@ -256,6 +262,35 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void wipeBills() {
             bills.wipe();
+        }
+
+        /**
+         * Starts (or continues) the KNS_BillInitiator loop.
+         * Progress arrives through window.__initiatorsNative(state, skip, msg).
+         */
+        @JavascriptInterface
+        public boolean startInitiators(boolean fresh) {
+            return initiators.start(fresh);
+        }
+
+        @JavascriptInterface
+        public void stopInitiators() {
+            initiators.stop();
+        }
+
+        @JavascriptInterface
+        public String initiatorsMeta() {
+            return initiators.meta();
+        }
+
+        @JavascriptInterface
+        public String initiatorsPage(int skip) {
+            return initiators.page(skip);
+        }
+
+        @JavascriptInterface
+        public void wipeInitiators() {
+            initiators.wipe();
         }
 
         /** Opens the system share sheet with plain text (used for data export). */

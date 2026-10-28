@@ -7,7 +7,7 @@ const path=require('node:path');
 const vm=require('node:vm');
 const scoring=require('../web/promise-scoring.js');
 const source=fs.readFileSync(path.join(__dirname,'../web/index.html'),'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
-const KEY='mk-promises-v1',CMT_KEY='mk-promises-committees-v1',BKEY='mk-promises-bills-v1';
+const KEY='mk-promises-v1',CMT_KEY='mk-promises-committees-v1',BKEY='mk-promises-bills-v1',IKEY='mk-promises-initiators-v1';
 const BASE='https://knesset.gov.il/OdataV4/ParliamentInfo/';
 const clone=value=>JSON.parse(JSON.stringify(value));
 const fixture=()=>({v:1,mks:[{id:'m1',name:'חבר כנסת לבדיקה',faction:'סיעה',knesset:'25',isNew:false,apiPersonId:123,
@@ -45,11 +45,11 @@ function app(options={}){
       }
     }
   }
-  const nodes=Object.fromEntries(['app','items','title','backBtn','toast','apiFailure','blProg','blItems'].map(id=>[id,new Element(id)]));
+  const nodes=Object.fromEntries(['app','items','title','backBtn','toast','apiFailure','blProg','blItems','iniProg'].map(id=>[id,new Element(id)]));
   nodes.dlgForm=new Form('dlgForm');nodes.dlg=Object.assign(new Element('dlg'),{open:false,onclose:null,
     showModal(){assert.equal(this.open,false);this.open=true},close(){if(!this.open)return;this.open=false;state.tasks.push(()=>{if(this.onclose)this.onclose()})}});
   const document={activeElement:null,getElementById(id){
-    if(['items','apiFailure','blProg','blItems'].includes(id)&&!nodes.app.innerHTML.includes('id="'+id+'"'))return null;
+    if(['items','apiFailure','blProg','blItems','iniProg'].includes(id)&&!nodes.app.innerHTML.includes('id="'+id+'"'))return null;
     return nodes[id]||null;
   },addEventListener(name,fn){listeners[name]=fn}};
   const window={scrollTo(){},MKPromiseScoring:scoring,Android:options.android===undefined?{shareText(text){state.shares.push(text)}}:options.android};
@@ -60,7 +60,7 @@ function app(options={}){
     fetch(url,config){state.fetches.push(url);return Promise.resolve(options.route?options.route(new URL(url),config,h):reply({value:[]}))},
     console:{log(...args){state.logs.push(args)},warn(...args){state.logs.push(args)},error(...args){state.logs.push(args)}}
   };
-  const hook='window.__t={state:function(){return S},normalize:normalizeState,bl:bl,cm:cm,failure:function(){return apiFailure},busy:function(){return blRun||cmLoading},view:function(){return view}};';
+  const hook='window.__t={state:function(){return S},normalize:normalizeState,bl:bl,cm:cm,ini:ini,failure:function(){return apiFailure},busy:function(){return blRun||iniRun||cmLoading},view:function(){return view}};';
   const instrumented=source.replace(/\}\)\(\);\s*$/,hook+'\n})();');assert.notEqual(instrumented,source);
   vm.runInNewContext(instrumented,context,{filename:'index.html'});
   const h={state,storage,nodes,window,hooks:window.__t,record(){return clone(window.__t.state())},failure(){return clone(window.__t.failure())},html(){return nodes.app.innerHTML}};
@@ -303,14 +303,52 @@ test('on Android a saved run is reloaded from the bridge when the screen opens, 
   const h=app({android:api});assert.equal(reads.length,0);h.click('openBills');assert.equal(h.hooks.bl().rows.length,120);assert.match(h.html(),/120 הצעות/);
 });
 
+/* ---------- all initiators: Android loop in Java ---------- */
+
+function androidInitiators(){
+  const calls={start:[],stop:0,wipe:0};const pages={};let meta='';let running=false;
+  return {calls,pages,setMeta(value){meta=value},setRunning(value){running=value},api:{
+    startInitiators(fresh){calls.start.push([fresh]);return !running},stopInitiators(){calls.stop++},initiatorsMeta(){return meta},initiatorsPage(skip){return pages[skip]||''},wipeInitiators(){calls.wipe++}}};
+}
+const initiatorRow=(id,billId,personId)=>({Id:id,BillID:billId,PersonID:personId,IsInitiator:true,Ordinal:1,LastUpdatedDate:'2026-01-01T00:00:00'});
+const iniPage=(from,count)=>JSON.stringify({value:Array.from({length:count},(_,i)=>initiatorRow(from+i,from+1000+i,123))});
+
+test('on Android the initiators loop delegates to Java and reads saved pages through the bridge',async()=>{
+  const nb=androidBills();const ni=androidInitiators();
+  const h=app({android:{...nb.api,...ni.api,shareText(t){}}});
+  h.click('openBills');
+  h.click('loadAllInitiators');await h.flush();
+  assert.deepEqual(ni.calls.start,[[true]]);
+  ni.pages[0]=iniPage(1,100);h.window.__initiatorsNative('progress',0,'');
+  assert.equal(h.hooks.ini().rows.length,100);assert.equal(h.hooks.ini().nextSkip,100);
+  ni.pages[100]=iniPage(101,50);h.window.__initiatorsNative('progress',100,'');
+  assert.equal(h.hooks.ini().rows.length,150);
+  ni.setMeta(JSON.stringify({nextSkip:200,done:true,loadedAt:'2026-10-28T10:00:00Z'}));h.window.__initiatorsNative('done',200,'');
+  assert.equal(h.hooks.ini().rows.length,150);assert.equal(h.hooks.ini().done,true);
+  assert.match(h.nodes.toast.textContent,/150/);
+  assert.equal(h.storage.has(IKEY),false,'Java keeps the pages; nothing large goes to localStorage');
+  h.click('stopInitiators');assert.equal(ni.calls.stop,1);
+});
+
+test('on Android an initiators error is shown with diagnostics',async()=>{
+  const nb=androidBills();const ni=androidInitiators();
+  ni.setRunning(true);
+  const h=app({android:{...nb.api,...ni.api,shareText(t){}}});
+  h.click('openBills');h.click('loadAllInitiators');await h.flush();
+  assert.match(h.nodes.toast.textContent,/כבר רצה/);
+  ni.setRunning(false);h.click('loadAllInitiators');await h.flush();
+  ni.setMeta(JSON.stringify({nextSkip:0,done:false,loadedAt:''}));h.window.__initiatorsNative('error',0,'HTTP 503');
+  assert.equal(h.failure().action,'initiators');assert.match(h.failure().message,/503/);
+});
+
 /* ---------- wipe and navigation ---------- */
 
 test('wiping all data also clears the local bills and committee caches, including Java storage',async()=>{
-  const n=androidBills();
-  const h=app({android:n.api,storage:{[CMT_KEY]:{win:{from:'2026-04-27',to:'2026-10-27'},committees:[],sessions:[],roles:[]},[BKEY]:{knesset:25,rows:[],nextSkip:0,done:false,loadedAt:''}}});
+  const nb=androidBills();const ni=androidInitiators();
+  const h=app({android:{...nb.api,...ni.api,shareText(t){}},storage:{[CMT_KEY]:{win:{from:'2026-04-27',to:'2026-10-27'},committees:[],sessions:[],roles:[]},[BKEY]:{knesset:25,rows:[],nextSkip:0,done:false,loadedAt:''}}});
   h.click('menu');h.submit({act:'wipe'});await h.flush();h.submit({});await h.flush();
-  assert.deepEqual(h.record(),{v:1,mks:[]});assert.equal(h.storage.has(CMT_KEY),false);assert.equal(h.storage.has(BKEY),false);assert.equal(n.calls.wipe,1);
-  assert.equal(h.hooks.cm(),null);assert.equal(h.hooks.bl(),null);
+  assert.deepEqual(h.record(),{v:1,mks:[]});assert.equal(h.storage.has(CMT_KEY),false);assert.equal(h.storage.has(BKEY),false);assert.equal(h.storage.has(IKEY),false);assert.equal(nb.calls.wipe,1);assert.equal(ni.calls.wipe,1);
+  assert.equal(h.hooks.cm(),null);assert.equal(h.hooks.bl(),null);assert.equal(h.hooks.ini(),null);
 });
 
 test('the back button leaves the committee, committees and bills screens one level at a time',()=>{

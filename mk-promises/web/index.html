@@ -83,7 +83,7 @@ var view={name:'list'};
 var F={q:'',faction:'',onlyNew:false};
 var bills=Object.create(null); // mkId -> loaded bills
 var apiFailure=null; // Temporary diagnostics only; never part of saved records or backups.
-var API_ACTIONS=['members','bills','committees','allbills'];
+var API_ACTIONS=['members','bills','committees','allbills','initiators'];
 
 function uid(){return Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-4)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]})}
@@ -360,7 +360,7 @@ function reportApiError(action,error,context){
 }
 function renderApiFailure(){
   var failure=apiFailure;if(!failure)return'';
-  var title={bills:'טעינת הצעות החוק נכשלה',committees:'טעינת הוועדות נכשלה',allbills:'טעינת כל הצעות החוק נכשלה'}[failure.action]||'טעינת חברי הכנסת נכשלה';
+  var title={bills:'טעינת הצעות החוק נכשלה',committees:'טעינת הוועדות נכשלה',allbills:'טעינת כל הצעות החוק נכשלה',initiators:'טעינת יוזמי הצעות החוק נכשלה'}[failure.action]||'טעינת חברי הכנסת נכשלה';
   var canRetry=failure.action==='members'?recoveryBackup===null:failure.action==='bills'?!!mk(failure.context.id):true;
   var h='<section class="card api-error" id="apiFailure" role="alert" aria-labelledby="apiFailureTitle"><h3 id="apiFailureTitle">'+title+'</h3>'
     +'<div class="mute">'+(failure.entity?'מאגר: <span dir="ltr">'+esc(failure.entity)+'</span> · ':'')+(failure.status?'<span dir="ltr">HTTP '+failure.status+'</span>':'לא התקבלה תשובת HTTP תקינה')+'</div>'
@@ -387,6 +387,7 @@ function retryApiFailure(){
   }
   if(failure.action==='committees'){clearApiFailure();return loadCommittees()}
   if(failure.action==='allbills'){clearApiFailure();var saved=bl();return loadAllBills(saved?saved.knesset:25,false)}
+  if(failure.action==='initiators'){clearApiFailure();return loadAllInitiators(false)}
   clearApiFailure();return loadMembers(failure.context.k);
 }
 
@@ -534,12 +535,20 @@ function loadBills(m){
   var personId=m&&apiId(m.apiPersonId),requested={};
   if(!personId){toast('לחבר הכנסת הזה אין מזהה API תקין');return Promise.resolve()}
   toast('טוען הצעות חוק…');
-  return fetchAll(BASE+'KNS_BillInitiator?$filter=PersonID eq '+personId+'&$select=BillID,IsInitiator&$top=300',300).then(function(ini){
+  var cached=ini(),cachedRows=cached&&cached.done?initiatorsForMk(personId):null;
+  var iniPromise=cachedRows?Promise.resolve(cachedRows.map(function(r){return{BillID:r.b,IsInitiator:true}})):fetchAll(BASE+'KNS_BillInitiator?$filter=PersonID eq '+personId+'&$select=BillID,IsInitiator&$top=300',300);
+  return iniPromise.then(function(ini){
     ini.forEach(function(x){
       if(x&&x.IsInitiator===false)return;
       var id=x&&apiId(x.BillID);if(!id)throw new Error('מזהה לא תקין ברשימת הצעות החוק');requested[id]=true;
     });
     var ids=Object.keys(requested);
+    var allBills=bl();
+    if(allBills&&allBills.done){
+      var fromCache=[];
+      allBills.rows.forEach(function(r){if(requested[r.i])fromCache.push({BillID:r.i,KnessetNum:r.k,Name:r.n,SubTypeDesc:r.t||''})});
+      if(fromCache.length===ids.length)return[fromCache];
+    }
     return mapLimit(chunks(ids,API_ID_BATCH_SIZE),API_CONCURRENCY,function(c){
       return fetchAll(BASE+'KNS_Bill?$filter='+c.map(function(i){return'Id eq '+i}).join(' or ')+'&$select=Id,KnessetNum,Name,SubTypeDesc&$top=100',100)
     });
@@ -724,6 +733,8 @@ function cmtSection(m){
 // On Android the loop runs in Java (BillsLoader) and every raw page is kept in a file; in a browser it runs here.
 var BKEY='mk-promises-bills-v1',BL_MAX_SKIP=300000,BL_DELAY=120;
 var BL=null,blReady=false,blRun=false,blStop=false,BQ='';
+var IKEY='mk-promises-initiators-v1',INI_MAX_SKIP=500000,INI_DELAY=120;
+var INI=null,iniReady=false,iniRun=false,iniStop=false;
 function isNativeBills(){return!!(window.Android&&window.Android.startBills)}
 function blRead(){
   try{
@@ -835,19 +846,140 @@ function renderBills(){
   if(b&&b.rows.length)h+='<input id="bq" type="search" placeholder="חיפוש בשם הצעת החוק" value="'+esc(BQ)+'"><div id="blItems" style="margin-top:12px"></div>';
   return h;
 }
+function mkNameByPersonId(pid){
+  var found=null;S.mks.forEach(function(m){if(String(m.apiPersonId)===String(pid))found=m.name});return found;
+}
 function renderBillItems(){
   var el=document.getElementById('blItems'),b=bl();if(!el||!b)return;
+  var d=ini(),hasIni=d&&d.rows.length>0;
   var q=BQ.trim().toLowerCase(),list=q?b.rows.filter(function(x){return x.n.toLowerCase().indexOf(q)>=0}):b.rows;
   el.innerHTML='<p class="mute">'+list.length+' תוצאות'+(list.length>50?' · מוצגות 50 הראשונות':'')+'</p>'+list.slice(0,50).map(function(x){
-    return'<div class="card"><div>'+esc(x.n)+'</div><div class="mute">הכנסת ה-'+esc(x.k)+(x.t?' · '+esc(x.t):'')+'</div><button class="lnk" data-a="billAssign" data-b="'+esc(x.i)+'">שיוך להבטחה</button></div>';
+    var inis='';
+    if(hasIni){
+      var names=initiatorsForBill(x.i).map(function(r){return mkNameByPersonId(r.p)}).filter(Boolean);
+      if(names.length)inis=' · יוזמים: '+names.map(esc).join(', ');
+    }
+    return'<div class="card"><div>'+esc(x.n)+'</div><div class="mute">הכנסת ה-'+esc(x.k)+(x.t?' · '+esc(x.t):'')+inis+'</div><button class="lnk" data-a="billAssign" data-b="'+esc(x.i)+'">שיוך להבטחה</button></div>';
   }).join('');
 }
+/* ---------- initiators (bill→MK mapping) ---------- */
+function isNativeInitiators(){return!!(window.Android&&window.Android.startInitiators)}
+function iniRead_ls(){
+  try{
+    var raw=localStorage.getItem(IKEY);if(raw===null)return null;
+    var o=JSON.parse(raw);
+    if(!o||typeof o!=='object'||!Array.isArray(o.rows)||!Number.isSafeInteger(o.nextSkip)||o.nextSkip<0)return null;
+    return o;
+  }catch(e){return null}
+}
+function niMeta(){try{var t=window.Android.initiatorsMeta();return t?JSON.parse(t):null}catch(e){return null}}
+function niRows(skip){
+  try{
+    var t=window.Android.initiatorsPage(skip);if(!t)return[];
+    return(JSON.parse(t).value||[]).filter(function(r){return r&&apiId(r.BillID)&&apiId(r.PersonID)}).map(function(r){return{b:apiId(r.BillID),p:apiId(r.PersonID),init:r.IsInitiator!==false}});
+  }catch(e){return[]}
+}
+function niRead(){
+  var m=niMeta();if(!m||!Number.isSafeInteger(m.nextSkip)||m.nextSkip<0)return null;
+  var rows=[];
+  for(var s=0;s<m.nextSkip;s+=100)niRows(s).forEach(function(r){rows.push(r)});
+  return{rows:rows,nextSkip:m.nextSkip,done:m.done===true,loadedAt:typeof m.loadedAt==='string'?m.loadedAt:''};
+}
+function ini(){if(!iniReady){INI=isNativeInitiators()?niRead():iniRead_ls();iniReady=true}return INI}
+function iniSave(){
+  if(isNativeInitiators()||!INI)return true;
+  try{localStorage.setItem(IKEY,JSON.stringify(INI));return true}
+  catch(e){toast('אין מקום לשמור את נתוני היוזמים במכשיר');return false}
+}
+function iniProgress(){var el=document.getElementById('iniProg'),d=ini();if(el&&d)el.textContent=iniRun?'נטענו '+d.rows.length+' שיוכים · $skip='+d.nextSkip:''}
+window.__initiatorsNative=function(state,skip,msg){
+  var d=ini();
+  if(state==='progress'&&d){
+    var seen={};d.rows.forEach(function(r){seen[r.b+'_'+r.p]=1});
+    niRows(skip).forEach(function(r){var k=r.b+'_'+r.p;if(!seen[k]){seen[k]=1;d.rows.push(r)}});
+    d.nextSkip=skip+100;iniProgress();return;
+  }
+  iniRun=false;var again=niRead();if(again)INI=again;
+  if(state==='error')reportApiError('initiators',{message:'טעינת יוזמי הצעות החוק נכשלה: '+String(msg||'').slice(0,300)});else render();
+  var n=INI?INI.rows.length:0;
+  if(state==='done')toast('נטענו '+n+' שיוכי יוזמים');
+  else if(state==='stopped')toast('הטעינה נעצרה אחרי '+n+' שיוכים. אפשר להמשיך');
+};
+function nativeInitiators(fresh){
+  var started=false;try{started=window.Android.startInitiators(!!fresh)===true}catch(e){}
+  if(!started){toast('הטעינה כבר רצה או שלא ניתן להפעיל אותה');return}
+  var d=INI=fresh?{rows:[],nextSkip:0,done:false,loadedAt:''}:(ini()||{rows:[],nextSkip:0,done:false,loadedAt:''});
+  iniRun=true;d.done=false;render();iniProgress();
+}
+function initiatorsUrl(d){
+  return BASE+'KNS_BillInitiator?$skip='+d.nextSkip+'&$top=100&$orderby=Id&$select=BillID,PersonID,IsInitiator';
+}
+function loadAllInitiators(fresh){
+  if(iniRun)return Promise.resolve();
+  if(isNativeInitiators()){nativeInitiators(fresh);return Promise.resolve()}
+  var d=ini();
+  if(fresh||!d)INI=d={rows:[],nextSkip:0,done:false,loadedAt:''};
+  var seen={};d.rows.forEach(function(r){seen[r.b+'_'+r.p]=1});
+  iniRun=true;iniStop=false;d.done=false;render();iniProgress();
+  return new Promise(function(resolve){
+    function end(message,failure){
+      iniRun=false;d.loadedAt=new Date().toISOString();
+      if(INI===d)iniSave();
+      render();if(failure)reportApiError('initiators',failure);else toast(message);
+      resolve();
+    }
+    var ordered=true;
+    function step(){
+      if(INI!==d)return end('הטעינה בוטלה');
+      if(iniStop)return end('הטעינה נעצרה אחרי '+d.rows.length+' שיוכים. אפשר להמשיך');
+      if(d.nextSkip>=INI_MAX_SKIP)return end('עצירת ביטחון ב-'+INI_MAX_SKIP+' שורות');
+      var url=BASE+'KNS_BillInitiator?$skip='+d.nextSkip+'&$top=100'+(ordered?'&$orderby=Id':'')+'&$select=BillID,PersonID,IsInitiator';
+      return getJson(url).then(function(j){
+        if(j.value.length){
+          j.value.forEach(function(r){
+            var bid=r&&apiId(r.BillID),pid=r&&apiId(r.PersonID);
+            if(!bid||!pid)return;
+            var k=bid+'_'+pid;
+            if(!seen[k]){seen[k]=1;d.rows.push({b:bid,p:pid,init:r.IsInitiator!==false})}
+          });
+        }
+        if(!j.value.length){d.done=true;return end('נטענו '+d.rows.length+' שיוכי יוזמים')}
+        d.nextSkip+=100;
+        if(d.nextSkip%1000===0)iniSave();
+        iniProgress();
+        return new Promise(function(r){setTimeout(r,INI_DELAY)}).then(step);
+      }).catch(function(e){
+        if(ordered&&d.nextSkip===0&&!d.rows.length&&e&&e.status>=400&&e.status<500){ordered=false;return step()}
+        end('',e);
+      });
+    }
+    step();
+  });
+}
+function initiatorsForBill(billId){
+  var d=ini();if(!d)return[];
+  return d.rows.filter(function(r){return r.b===billId&&r.init});
+}
+function initiatorsForMk(personId){
+  var d=ini();if(!d)return[];
+  return d.rows.filter(function(r){return r.p===personId&&r.init});
+}
+function renderInitiators(){
+  var d=ini();
+  var h='<div class="card"><div class="mute">'+(d?((d.rows.length+' שיוכי יוזמים')+(d.done?'':' · הטעינה לא הושלמה, נקודת המשך $skip='+d.nextSkip)+(d.loadedAt?' · נטען '+esc(d.loadedAt.slice(0,16).replace('T',' ')):'')):'עדיין לא נטענו נתוני יוזמים')+'</div>'
+   +'<div id="iniProg" class="mute"></div><div class="row" style="margin-top:8px">'
+   +(iniRun?'<button class="pri" data-a="stopInitiators">עצירה</button>':'<button class="pri" data-a="loadAllInitiators">'+(d&&!d.done?'המשך טעינה':'טעינת כל היוזמים')+'</button>'+(d?'<button class="sec" data-a="freshInitiators">טעינה מחדש</button>':''))
+   +'</div><div class="mute" style="margin-top:8px">הטעינה מביאה את טבלת KNS_BillInitiator (שיוך הצעת חוק ליוזם) ב-100 שורות לכל בקשה. הנתונים נשמרים במכשיר.</div></div>';
+  return h;
+}
 function wipeCaches(){
-  blStop=true;
+  blStop=true;iniStop=true;
   try{localStorage.removeItem(BKEY)}catch(e){}
+  try{localStorage.removeItem(IKEY)}catch(e){}
   try{localStorage.removeItem(CMT_KEY)}catch(e){}
   try{if(window.Android&&window.Android.wipeBills)window.Android.wipeBills()}catch(e){}
-  BL=null;blReady=true;blRun=false;BQ='';CM=null;cmReady=true;
+  try{if(window.Android&&window.Android.wipeInitiators)window.Android.wipeInitiators()}catch(e){}
+  BL=null;blReady=true;blRun=false;BQ='';INI=null;iniReady=true;iniRun=false;CM=null;cmReady=true;
 }
 function assignEvidence(options,title,type,url){
   var promiseOptions=options.map(function(x){return[x.key,x.label]});
@@ -878,7 +1010,7 @@ function render(){
   if(view.name==='mk'&&mk(view.id)){back.hidden=false;title.textContent=mk(view.id).name;app.innerHTML=renderApiFailure()+renderMk(mk(view.id))}
   else if(view.name==='cmts'){back.hidden=false;title.textContent='ועדות הכנסת ה-25';app.innerHTML=renderApiFailure()+renderCmts()}
   else if(view.name==='cmt'&&cm()){back.hidden=false;title.textContent=cmtName(view.id);app.innerHTML=renderApiFailure()+renderCmt(view.id)}
-  else if(view.name==='bills'){back.hidden=false;title.textContent='כל הצעות החוק';app.innerHTML=renderApiFailure()+renderBills();renderBillItems();blProgress()}
+  else if(view.name==='bills'){back.hidden=false;title.textContent='כל הצעות החוק';app.innerHTML=renderApiFailure()+renderBills()+renderInitiators();renderBillItems();blProgress();iniProgress()}
   else{view={name:'list'};back.hidden=true;title.textContent='מעקב הבטחות';app.innerHTML=renderApiFailure()+renderListShell();renderItems()}
 }
 function renderListShell(){
@@ -967,6 +1099,9 @@ var A={
   loadAllBills:function(){clearApiFailure('allbills');var b=bl();if(b&&!b.done)loadAllBills(b.knesset,false);else startBills()},
   freshBills:function(){clearApiFailure('allbills');startBills()},
   stopBills:function(){if(isNativeBills()){try{window.Android.stopBills()}catch(e){}}else blStop=true},
+  loadAllInitiators:function(){clearApiFailure('initiators');var d=ini();if(d&&!d.done)loadAllInitiators(false);else loadAllInitiators(true)},
+  freshInitiators:function(){clearApiFailure('initiators');loadAllInitiators(true)},
+  stopInitiators:function(){if(isNativeInitiators()){try{window.Android.stopInitiators()}catch(e){}}else iniStop=true},
   billAssign:function(d){
     var b=bl(),row=b&&b.rows.find(function(x){return String(x.i)===d.b});if(!row)return;
     var options=[];S.mks.forEach(function(m){m.promises.forEach(function(p){options.push({key:m.id+'|'+p.id,label:(m.name+': '+p.text).slice(0,90),member:m,promise:p})})});
