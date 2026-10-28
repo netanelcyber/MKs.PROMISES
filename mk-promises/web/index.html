@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f4e79">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<title>מעקב הבטחות</title>
+<style>
+:root{--bg:#f4f6f8;--card:#fff;--ink:#1c2430;--mute:#5d6b7a;--line:#dfe4ea;--brand:#1f4e79;--brand-ink:#fff;--ok:#1b7a43;--part:#8a5d00;--bad:#b3261e;--na:#5d6b7a;--coal:#5b3a9a;--chip:#eef2f6}
+@media (prefers-color-scheme:dark){:root{--bg:#11151a;--card:#1a2027;--ink:#e8ecf1;--mute:#9aa7b5;--line:#2b343e;--brand:#6fa8dc;--brand-ink:#0e1419;--ok:#5fcf8a;--part:#e0b04a;--bad:#ff8a80;--na:#9aa7b5;--coal:#b79cf0;--chip:#232b34}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Hebrew",Arial,sans-serif}
+body{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{position:sticky;top:0;z-index:5;background:var(--brand);color:var(--brand-ink);padding:12px 16px;display:flex;align-items:center;gap:10px}
+header h1{font-size:18px;margin:0;flex:1}
+header button{background:transparent;color:inherit;border:1px solid rgba(255,255,255,.5);border-radius:8px;padding:6px 10px;font:inherit;font-size:14px}
+main{padding:16px;max-width:720px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin:0 0 12px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.grow{flex:1;min-width:0}
+h2{font-size:17px;margin:20px 0 8px}
+h3{font-size:16px;margin:0 0 4px}
+.mute{color:var(--mute);font-size:14px}
+.chip{display:inline-block;background:var(--chip);border-radius:999px;padding:2px 10px;font-size:13px;margin:2px 0 2px 4px}
+.chip.ok{color:var(--ok)}.chip.part{color:var(--part)}.chip.bad{color:var(--bad)}.chip.na{color:var(--na)}.chip.coal{color:var(--coal)}
+.chip.new{background:var(--brand);color:var(--brand-ink)}
+button,select,input,textarea{font:inherit;color:var(--ink)}
+button.pri{background:var(--brand);color:var(--brand-ink);border:0;border-radius:10px;padding:10px 14px}
+button.sec{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+button.lnk{background:none;border:0;color:var(--brand);padding:4px 6px;text-decoration:underline}
+button.danger{color:var(--bad)}
+input,select,textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px}
+textarea{min-height:84px;resize:vertical}
+label{display:block;font-size:14px;color:var(--mute);margin:10px 0 4px}
+label.chk{display:flex;gap:8px;align-items:center;color:var(--ink)}
+label.chk input{width:auto}
+dialog{border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--ink);width:min(92vw,520px);padding:16px}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+.ev{border-inline-start:3px solid var(--line);padding:4px 10px;margin:6px 0}
+.ev.support{border-color:var(--ok)}.ev.contradict{border-color:var(--bad)}
+a{color:var(--brand);word-break:break-all}
+.note{font-size:13px;color:var(--mute);margin-top:24px;border-top:1px solid var(--line);padding-top:12px}
+#toast{position:fixed;inset-inline:16px;bottom:calc(16px + env(safe-area-inset-bottom));background:#222;color:#fff;border-radius:10px;padding:10px 14px;display:none;z-index:20}
+</style>
+</head>
+<body>
+<header>
+  <button id="backBtn" hidden aria-label="חזרה">→ חזרה</button>
+  <h1 id="title">מעקב הבטחות</h1>
+  <button data-a="menu">⋮ גיבוי</button>
+</header>
+<main id="app"></main>
+<div id="toast" role="status"></div>
+<dialog id="dlg"><form method="dialog" id="dlgForm"></form></dialog>
+
+<script>
+(function(){
+'use strict';
+var BASE='https://knesset.gov.il/OdataV4/ParliamentInfo/';
+var KEY='mk-promises-v1';
+var STATUS={unchecked:['לא נבדק','na'],kept:['קוימה','ok'],partial:['קוימה חלקית','part'],broken:['לא קוימה','bad'],unmeasurable:['לא ניתנת למדידה','na'],coalition:['הוגבלה בהסכם קואליציוני','coal']};
+var EFFECT={support:'מקדם את ההבטחה',contradict:'סותר את ההבטחה',context:'הקשר'};
+var EVTYPE=['הצעת חוק','הצבעה','נאום / התבטאות','ועדה','אחר'];
+var S=load();
+var view={name:'list'};
+var F={q:'',faction:'',onlyNew:false};
+var bills={}; // mkId -> loaded bills
+
+function uid(){return Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-4)}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]})}
+function load(){try{var r=localStorage.getItem(KEY);if(r){var o=JSON.parse(r);if(o&&Array.isArray(o.mks))return o}}catch(e){}return{v:1,mks:[]}}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){toast('השמירה המקומית נכשלה')}}
+function mk(id){return S.mks.find(function(m){return m.id===id})}
+function toast(t){var el=document.getElementById('toast');el.textContent=t;el.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(function(){el.style.display='none'},3500)}
+function okUrl(u){return /^https?:\/\/[^\s]+$/i.test(u||'')}
+function link(u){return okUrl(u)?'<a href="'+esc(u)+'" target="_blank" rel="noopener">'+esc(u.replace(/^https?:\/\//,'').slice(0,60))+'</a>':''}
+
+/* ---------- network: native bridge on Android, fetch in browser ---------- */
+var pending={},nid=0;
+window.__nativeDone=function(id,ok,status,b64){var p=pending[id];delete pending[id];if(!p)return;
+  if(!ok){p.rej(new Error('HTTP '+status));return}
+  try{p.res(new TextDecoder().decode(Uint8Array.from(atob(b64),function(c){return c.charCodeAt(0)})))}catch(e){p.rej(e)}};
+function getText(url){
+  if(window.Android&&window.Android.httpGet){return new Promise(function(res,rej){var id=++nid;pending[id]={res:res,rej:rej};window.Android.httpGet(id,url)})}
+  return fetch(url,{headers:{Accept:'application/json'}}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.text()});
+}
+function getJson(url){return getText(encodeURI(url)).then(JSON.parse)}
+function fetchAll(url,max){var out=[];
+  function step(u){return getJson(u).then(function(j){out=out.concat(j.value||[]);
+    if(j['@odata.nextLink']&&out.length<max)return step(j['@odata.nextLink']);return out})}
+  return step(url)}
+function chunks(a,n){var r=[];for(var i=0;i<a.length;i+=n)r.push(a.slice(i,i+n));return r}
+
+function loadMembers(k){
+  toast('טוען חברי כנסת…');
+  return fetchAll(BASE+'KNS_PersonToPosition?$filter=KnessetNum eq '+k+' and PositionID eq 43&$select=PersonID,FactionName,IsCurrent',3000).then(function(pos){
+    var byId={};pos.forEach(function(p){if(!byId[p.PersonID]||p.IsCurrent)byId[p.PersonID]=p});
+    var ids=Object.keys(byId);
+    return Promise.all(chunks(ids,30).map(function(c){
+      return getJson(BASE+'KNS_Person?$filter='+c.map(function(i){return'PersonID eq '+i}).join(' or ')+'&$select=PersonID,FirstName,LastName&$top=100').then(function(j){return j.value||[]})
+    })).then(function(parts){
+      var added=0;
+      [].concat.apply([],parts).forEach(function(p){
+        if(S.mks.some(function(m){return m.apiPersonId===p.PersonID}))return;
+        S.mks.push({id:uid(),name:((p.FirstName||'')+' '+(p.LastName||'')).trim(),faction:(byId[p.PersonID]||{}).FactionName||'',knesset:k,isNew:false,apiPersonId:p.PersonID,promises:[],background:[]});added++});
+      save();render();toast('נוספו '+added+' חברי כנסת');
+    });
+  }).catch(function(e){toast('הטעינה מה-API נכשלה ('+e.message+'). אפשר להוסיף ידנית.')});
+}
+function loadBills(m){
+  if(!m.apiPersonId){toast('לחבר הכנסת הזה אין מזהה API');return}
+  toast('טוען הצעות חוק…');
+  fetchAll(BASE+'KNS_BillInitiator?$filter=PersonID eq '+m.apiPersonId+'&$select=BillID,IsInitiator&$top=100',300).then(function(ini){
+    var ids=ini.filter(function(x){return x.IsInitiator!==false}).map(function(x){return x.BillID});
+    return Promise.all(chunks(ids,25).map(function(c){
+      return getJson(BASE+'KNS_Bill?$filter='+c.map(function(i){return'BillID eq '+i}).join(' or ')+'&$select=BillID,KnessetNum,Name,SubTypeDesc&$top=100').then(function(j){return j.value||[]})
+    }));
+  }).then(function(parts){bills[m.id]=[].concat.apply([],parts);render();toast('נטענו '+bills[m.id].length+' הצעות')})
+  .catch(function(e){toast('הטעינה נכשלה ('+e.message+')')});
+}
+
+/* ---------- dialogs ---------- */
+function ask(title,fields,okLabel){
+  return new Promise(function(resolve){
+    var dlg=document.getElementById('dlg'),f=document.getElementById('dlgForm');
+    var h='<h3>'+esc(title)+'</h3>';
+    fields.forEach(function(x){
+      var v=x.value==null?'':x.value,req=x.required?' required':'';
+      if(x.type==='checkbox'){h+='<label class="chk"><input type="checkbox" name="'+x.k+'"'+(v?' checked':'')+'> '+esc(x.label)+'</label>';return}
+      h+='<label for="f_'+x.k+'">'+esc(x.label)+(x.required?' *':'')+'</label>';
+      if(x.type==='select'){h+='<select id="f_'+x.k+'" name="'+x.k+'">'+x.options.map(function(o){return'<option value="'+esc(o[0])+'"'+(o[0]===v?' selected':'')+'>'+esc(o[1])+'</option>'}).join('')+'</select>'}
+      else if(x.type==='textarea'){h+='<textarea id="f_'+x.k+'" name="'+x.k+'"'+req+'>'+esc(v)+'</textarea>'}
+      else{h+='<input id="f_'+x.k+'" name="'+x.k+'" type="'+(x.type||'text')+'" value="'+esc(v)+'"'+req+(x.type==='url'?' inputmode="url" placeholder="https://…"':'')+'>'}
+    });
+    h+='<div class="row" style="margin-top:14px"><button class="pri" value="ok">'+esc(okLabel||'שמירה')+'</button><button class="sec" value="cancel" formnovalidate>ביטול</button></div>';
+    f.innerHTML=h;
+    f.onsubmit=function(ev){
+      var sub=ev.submitter&&ev.submitter.value;
+      if(sub!=='ok'){resolve(null);return}
+      var o={};fields.forEach(function(x){var el=f.elements[x.k];o[x.k]=x.type==='checkbox'?el.checked:(el.value||'').trim()});
+      for(var i=0;i<fields.length;i++){var x=fields[i];if(x.type==='url'&&o[x.k]&&!okUrl(o[x.k])){ev.preventDefault();toast('הקישור חייב להתחיל ב-https://');return}}
+      resolve(o)};
+    dlg.onclose=function(){resolve(null)};
+    dlg.showModal();
+  });
+}
+function statusOpts(){return Object.keys(STATUS).map(function(k){return[k,STATUS[k][0]]})}
+
+/* ---------- views ---------- */
+function chip(st){var s=STATUS[st]||STATUS.unchecked;return'<span class="chip '+s[1]+'">'+esc(s[0])+'</span>'}
+function counts(m){var c={};m.promises.forEach(function(p){c[p.status]=(c[p.status]||0)+1});
+  return Object.keys(STATUS).filter(function(k){return c[k]}).map(function(k){return'<span class="chip '+STATUS[k][1]+'">'+esc(STATUS[k][0])+' · '+c[k]+'</span>'}).join('')}
+
+function render(){
+  var app=document.getElementById('app'),back=document.getElementById('backBtn'),title=document.getElementById('title');
+  if(view.name==='mk'&&mk(view.id)){back.hidden=false;title.textContent=mk(view.id).name;app.innerHTML=renderMk(mk(view.id))}
+  else{view={name:'list'};back.hidden=true;title.textContent='מעקב הבטחות';app.innerHTML=renderListShell();renderItems()}
+}
+function renderListShell(){
+  var factions=Array.from(new Set(S.mks.map(function(m){return m.faction}).filter(Boolean))).sort();
+  var h='<div class="row" style="margin-bottom:12px"><button class="pri" data-a="addMk">+ הוספת ח"כ</button><button class="sec" data-a="loadMembers">טעינה מהכנסת (ה-25)</button></div>';
+  if(S.mks.length){
+    h+='<div class="card"><input id="q" type="search" placeholder="חיפוש לפי שם" value="'+esc(F.q)+'">'
+     +'<div class="row" style="margin-top:8px"><select id="fac" class="grow"><option value="">כל הסיעות</option>'+factions.map(function(f){return'<option'+(F.faction===f?' selected':'')+'>'+esc(f)+'</option>'}).join('')+'</select>'
+     +'<label class="chk" style="margin:0"><input type="checkbox" id="onlyNew"'+(F.onlyNew?' checked':'')+'> חדשים בכנסת ה-26</label></div></div>';
+  }
+  h+='<div id="items"></div>';
+  h+='<div class="note">המידע באפליקציה מוזן על ידי המשתמש. לכל הבטחה ולכל ראיה נדרש קישור למקור, ואין ציון מסכם: הסטטוס נקבע לכל הבטחה בנפרד, ואותה תבנית חלה על כל חברי הכנסת.</div>';
+  return h;
+}
+function renderItems(){
+  var el=document.getElementById('items');if(!el)return;
+  var q=F.q.toLowerCase();
+  var list=S.mks.filter(function(m){return(!q||m.name.toLowerCase().indexOf(q)>=0)&&(!F.faction||m.faction===F.faction)&&(!F.onlyNew||m.isNew)});
+  if(!S.mks.length){el.innerHTML='<div class="card"><h3>מתחילים</h3><p class="mute">הוסיפו חבר כנסת ידנית, או טענו את רשימת הכנסת ה-25 מה-API הרשמי. לכל חבר כנסת מוסיפים הבטחות עם מקור, ואחר כך ראיות מהפעילות שלו: הצעות חוק, הצבעות ונאומים.</p><p class="mute">כדי לתעד חברי כנסת חדשים לפני ההשבעה, סמנו "חדש בכנסת ה-26" והוסיפו להם פעילות ציבורית קודמת עם מקור.</p></div>';return}
+  if(!list.length){el.innerHTML='<p class="mute">לא נמצאו תוצאות.</p>';return}
+  el.innerHTML=list.map(function(m){
+    return'<div class="card" data-a="open" data-id="'+m.id+'" style="cursor:pointer"><div class="row"><h3 class="grow">'+esc(m.name)+'</h3>'+(m.isNew?'<span class="chip new">חדש</span>':'')+'</div>'
+     +'<div class="mute">'+esc(m.faction||'ללא סיעה')+' · הכנסת ה-'+esc(m.knesset||'')+' · '+m.promises.length+' הבטחות</div><div>'+counts(m)+'</div></div>'}).join('');
+}
+function renderMk(m){
+  var h='<div class="card"><div class="row"><div class="grow"><div class="mute">'+esc(m.faction||'ללא סיעה')+' · הכנסת ה-'+esc(m.knesset||'')+(m.isNew?' · חדש':'')+'</div><div>'+(counts(m)||'<span class="mute">אין עדיין הבטחות</span>')+'</div></div>'
+   +'<button class="sec" data-a="editMk" data-id="'+m.id+'">עריכה</button></div></div>';
+  h+='<div class="row"><h2 class="grow">הבטחות</h2><button class="pri" data-a="addPromise" data-id="'+m.id+'">+ הבטחה</button></div>';
+  if(!m.promises.length)h+='<p class="mute">הוסיפו הבטחה עם קישור למקור שבו נאמרה (מצע, ראיון, נאום).</p>';
+  m.promises.forEach(function(p){
+    h+='<div class="card"><div>'+esc(p.text)+'</div><div class="mute">'+(p.topic?esc(p.topic)+' · ':'')+(p.sourceDate?esc(p.sourceDate)+' · ':'')+link(p.sourceUrl)+'</div>'
+     +'<label>סטטוס</label><select data-a="status" data-id="'+m.id+'" data-p="'+p.id+'">'+statusOpts().map(function(o){return'<option value="'+o[0]+'"'+(o[0]===p.status?' selected':'')+'>'+esc(o[1])+'</option>'}).join('')+'</select>'
+     +(p.note?'<div class="mute" style="margin-top:6px">'+esc(p.note)+'</div>':'');
+    (p.evidence||[]).forEach(function(e){
+      h+='<div class="ev '+esc(e.effect)+'"><div>'+esc(e.title)+'</div><div class="mute">'+esc(e.type)+' · '+esc(EFFECT[e.effect]||'')+(e.date?' · '+esc(e.date):'')+' · '+link(e.url)+' <button class="lnk danger" data-a="delEv" data-id="'+m.id+'" data-p="'+p.id+'" data-e="'+e.id+'">מחיקה</button></div></div>'});
+    h+='<div class="row" style="margin-top:8px"><button class="sec" data-a="addEv" data-id="'+m.id+'" data-p="'+p.id+'">+ ראיה</button><button class="lnk" data-a="editPromise" data-id="'+m.id+'" data-p="'+p.id+'">עריכה</button><button class="lnk danger" data-a="delPromise" data-id="'+m.id+'" data-p="'+p.id+'">מחיקה</button></div></div>'});
+  h+='<div class="row"><h2 class="grow">פעילות ציבורית קודמת</h2><button class="sec" data-a="addBg" data-id="'+m.id+'">+ פריט</button></div>';
+  h+='<p class="mute">תפקידים, פרסומים והצהרות פומביות שאפשר לקשר למקור. בלי פרטים פרטיים.</p>';
+  m.background.forEach(function(b){
+    h+='<div class="card"><div>'+esc(b.title)+'</div><div class="mute">'+(b.period?esc(b.period)+' · ':'')+link(b.url)+'</div>'+(b.note?'<div class="mute">'+esc(b.note)+'</div>':'')
+     +'<button class="lnk danger" data-a="delBg" data-id="'+m.id+'" data-b="'+b.id+'">מחיקה</button></div>'});
+  if(m.apiPersonId){
+    h+='<div class="row"><h2 class="grow">הצעות חוק (מה-API)</h2><button class="sec" data-a="loadBills" data-id="'+m.id+'">טעינה</button></div>';
+    (bills[m.id]||[]).forEach(function(b){
+      h+='<div class="card"><div>'+esc(b.Name)+'</div><div class="mute">הכנסת ה-'+esc(b.KnessetNum)+' · '+esc(b.SubTypeDesc||'')+'</div><button class="lnk" data-a="billToPromise" data-id="'+m.id+'" data-b="'+b.BillID+'">שיוך להבטחה</button></div>'});
+  }
+  h+='<div style="margin-top:24px"><button class="lnk danger" data-a="delMk" data-id="'+m.id+'">מחיקת חבר הכנסת</button></div>';
+  return h;
+}
+
+/* ---------- actions ---------- */
+var A={
+  open:function(d){view={name:'mk',id:d.id};render();window.scrollTo(0,0)},
+  loadMembers:function(){loadMembers(25)},
+  addMk:function(){mkForm()},
+  editMk:function(d){mkForm(mk(d.id))},
+  addPromise:function(d){promiseForm(mk(d.id))},
+  editPromise:function(d){var m=mk(d.id);promiseForm(m,m.promises.find(function(p){return p.id===d.p}))},
+  delPromise:function(d){var m=mk(d.id);if(confirm('למחוק את ההבטחה?')){m.promises=m.promises.filter(function(p){return p.id!==d.p});save();render()}},
+  addEv:function(d){evForm(mk(d.id),d.p)},
+  delEv:function(d){var p=mk(d.id).promises.find(function(x){return x.id===d.p});p.evidence=p.evidence.filter(function(e){return e.id!==d.e});save();render()},
+  addBg:function(d){var m=mk(d.id);ask('פעילות ציבורית קודמת',[{k:'title',label:'תיאור (תפקיד / פרסום / הצהרה)',required:true},{k:'period',label:'תקופה'},{k:'url',label:'קישור למקור',type:'url',required:true},{k:'note',label:'הערה',type:'textarea'}]).then(function(o){if(!o)return;o.id=uid();m.background.push(o);save();render()})},
+  delBg:function(d){var m=mk(d.id);m.background=m.background.filter(function(b){return b.id!==d.b});save();render()},
+  loadBills:function(d){loadBills(mk(d.id))},
+  billToPromise:function(d){
+    var m=mk(d.id);if(!m.promises.length){toast('קודם הוסיפו הבטחה');return}
+    var b=(bills[m.id]||[]).find(function(x){return String(x.BillID)===d.b});if(!b)return;
+    ask('שיוך הצעת חוק להבטחה',[{k:'p',label:'הבטחה',type:'select',options:m.promises.map(function(p){return[p.id,p.text.slice(0,60)]})},{k:'effect',label:'השפעה',type:'select',options:[['support',EFFECT.support],['contradict',EFFECT.contradict],['context',EFFECT.context]]}]).then(function(o){
+      if(!o)return;var p=m.promises.find(function(x){return x.id===o.p});
+      p.evidence=p.evidence||[];p.evidence.push({id:uid(),title:b.Name,type:'הצעת חוק',effect:o.effect,date:'',url:BASE+'KNS_Bill('+b.BillID+')'});save();render();toast('נוסף')})},
+  delMk:function(d){if(confirm('למחוק את חבר הכנסת וכל הנתונים שלו?')){S.mks=S.mks.filter(function(m){return m.id!==d.id});save();view={name:'list'};render()}},
+  menu:function(){menu()}
+};
+function mkForm(m){
+  ask(m?'עריכת חבר כנסת':'הוספת חבר כנסת',[{k:'name',label:'שם',value:m&&m.name,required:true},{k:'faction',label:'סיעה / מפלגה',value:m&&m.faction},{k:'knesset',label:'מספר הכנסת',type:'number',value:m?m.knesset:26},{k:'isNew',label:'חדש בכנסת ה-26',type:'checkbox',value:m&&m.isNew}]).then(function(o){
+    if(!o)return;
+    if(m){m.name=o.name;m.faction=o.faction;m.knesset=o.knesset;m.isNew=o.isNew}
+    else{var n={id:uid(),name:o.name,faction:o.faction,knesset:o.knesset,isNew:o.isNew,promises:[],background:[]};S.mks.push(n);view={name:'mk',id:n.id}}
+    save();render()})}
+function promiseForm(m,p){
+  ask(p?'עריכת הבטחה':'הבטחה חדשה',[{k:'text',label:'נוסח ההבטחה',type:'textarea',value:p&&p.text,required:true},{k:'topic',label:'נושא',value:p&&p.topic},{k:'sourceUrl',label:'קישור למקור',type:'url',value:p&&p.sourceUrl,required:true},{k:'sourceDate',label:'תאריך המקור',type:'date',value:p&&p.sourceDate},{k:'status',label:'סטטוס',type:'select',options:statusOpts(),value:p?p.status:'unchecked'},{k:'note',label:'הערה',type:'textarea',value:p&&p.note}]).then(function(o){
+    if(!o)return;
+    if(p){Object.assign(p,o)}else{o.id=uid();o.evidence=[];m.promises.push(o)}
+    save();render()})}
+function evForm(m,pid){
+  ask('ראיה לפעילות',[{k:'title',label:'תיאור',required:true},{k:'type',label:'סוג',type:'select',options:EVTYPE.map(function(t){return[t,t]})},{k:'effect',label:'השפעה על ההבטחה',type:'select',options:[['support',EFFECT.support],['contradict',EFFECT.contradict],['context',EFFECT.context]]},{k:'date',label:'תאריך',type:'date'},{k:'url',label:'קישור למקור',type:'url',required:true}]).then(function(o){
+    if(!o)return;var p=m.promises.find(function(x){return x.id===pid});o.id=uid();p.evidence=p.evidence||[];p.evidence.push(o);save();render()})}
+function menu(){
+  ask('גיבוי ושחזור',[{k:'act',label:'פעולה',type:'select',options:[['export','ייצוא / שיתוף הנתונים'],['import','ייבוא מקובץ JSON שהודבק'],['wipe','מחיקת כל הנתונים']]}],'המשך').then(function(o){
+    if(!o)return;
+    if(o.act==='export'){var t=JSON.stringify(S,null,2);
+      if(window.Android&&window.Android.shareText)window.Android.shareText(t);
+      else if(navigator.share)navigator.share({title:'מעקב הבטחות',text:t}).catch(function(){});
+      else{var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([t],{type:'application/json'}));a.download='mk-promises.json';a.click()}}
+    else if(o.act==='import'){ask('הדביקו JSON',[{k:'json',label:'תוכן הגיבוי',type:'textarea',required:true}],'ייבוא').then(function(x){
+      if(!x)return;try{var j=JSON.parse(x.json);if(!j||!Array.isArray(j.mks))throw 0;if(confirm('להחליף את הנתונים הנוכחיים?')){S=j;save();view={name:'list'};render()}}catch(e){toast('ה-JSON אינו תקין')}})}
+    else if(o.act==='wipe'){if(confirm('למחוק הכול? אי אפשר לשחזר.')){S={v:1,mks:[]};save();view={name:'list'};render()}}})}
+
+/* ---------- events ---------- */
+document.addEventListener('click',function(ev){var t=ev.target.closest('[data-a]');if(!t||t.tagName==='SELECT')return;var f=A[t.dataset.a];if(f){f(t.dataset)}});
+document.addEventListener('change',function(ev){var t=ev.target;
+  if(t.dataset&&t.dataset.a==='status'){var p=mk(t.dataset.id).promises.find(function(x){return x.id===t.dataset.p});p.status=t.value;save();render();return}
+  if(t.id==='fac'){F.faction=t.value;renderItems()}if(t.id==='onlyNew'){F.onlyNew=t.checked;renderItems()}});
+document.addEventListener('input',function(ev){if(ev.target.id==='q'){F.q=ev.target.value;renderItems()}});
+document.getElementById('backBtn').addEventListener('click',function(){view={name:'list'};render()});
+window.__back=function(){if(view.name==='mk'){view={name:'list'};render();return true}return false};
+if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)){navigator.serviceWorker.register('sw.js').catch(function(){})}
+render();
+})();
+</script>
+</body>
+</html>

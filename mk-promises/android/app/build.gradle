@@ -1,0 +1,34 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'il.mkpromises'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'il.mkpromises'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '0.1'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // The web app is the single source of truth: package ../../web as the app's assets.
+    sourceSets {
+        main {
+            assets.srcDirs = ['../../web']
+        }
+    }
+}
