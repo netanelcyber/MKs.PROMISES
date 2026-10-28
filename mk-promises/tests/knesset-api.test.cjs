@@ -22,6 +22,7 @@ function fixture(route, Android) {
   const ctx = {
     BASE, URL, Promise, TextDecoder, Uint8Array, atob, AbortController,
     window: {Android}, S: {v: 1, mks: []}, bills: Object.create(null),
+    ini: () => null, initiatorsForMk: () => [], bl: () => null,
     uid: () => 'member-' + (++uid),
     toast: value => messages.push(value), save: () => true, render: () => {},
     reportApiError: (action, error, context) => failures.push({action, error, context}),
