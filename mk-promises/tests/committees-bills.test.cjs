@@ -303,6 +303,34 @@ test('on Android a saved run is reloaded from the bridge when the screen opens, 
   const h=app({android:api});assert.equal(reads.length,0);h.click('openBills');assert.equal(h.hooks.bl().rows.length,120);assert.match(h.html(),/120 הצעות/);
 });
 
+/* ---------- a real KNS_Bill page returned by the Knesset server ---------- */
+// tests/fixtures/knesset-bills-page.json is 8 of the 100 rows of a page captured from the live service: pretty-printed JSON,
+// all 23 fields (the $select is not applied in the capture), null dates, a summary text, and the server's own @odata.nextLink,
+// which drops the "$" from orderby and top.
+const realPage=fs.readFileSync(path.join(__dirname,'fixtures','knesset-bills-page.json'),'utf8');
+const realRows=JSON.parse(realPage).value;
+
+test('the real page shape loads through the browser loop and its quirky nextLink is never followed',async()=>{
+  const skips=[];
+  const h=app({route:url=>{const skip=Number(url.searchParams.get('$skip'));skips.push(skip);return skip===0?reply(realPage):reply({value:[]})}});
+  startAll(h);await h.settle();
+  assert.match(JSON.parse(realPage)['@odata.nextLink'],/orderby=Number%20desc&top=900&\$skip=100$/,'the capture really has the quirky link');
+  assert.deepEqual(skips,[0,100],'only the loop\'s own $skip requests are made');
+  const b=h.hooks.bl();assert.equal(b.rows.length,8);assert.equal(b.done,true);assert.equal(h.failure(),null);
+  assert.deepEqual(clone(b.rows[0]),{i:1057378,k:25,n:realRows[0].Name,t:'ממשלתית'});
+  assert.deepEqual(clone(b.rows.map(r=>r.i)),realRows.map(r=>r.Id));
+  assert.ok(!h.storage.get(BKEY).includes('SummaryLaw'),'only the four needed fields are kept');
+  h.type('bq','הביטוח הלאומי');assert.match(h.nodes.blItems.innerHTML,/2 תוצאות/);
+});
+
+test('the real page shape is read from the Java page file on Android',async()=>{
+  const n=androidBills();const h=app({android:n.api});startAll(h);await h.flush();
+  n.pages[0]=realPage;h.window.__billsNative('progress',0,'');
+  assert.equal(h.hooks.bl().rows.length,8);assert.deepEqual(clone(h.hooks.bl().rows.map(r=>r.i)),realRows.map(r=>r.Id));assert.equal(h.hooks.bl().nextSkip,100);
+  n.setMeta(JSON.stringify({knesset:25,nextSkip:100,done:true,loadedAt:'2026-10-28T10:00:00Z'}));h.window.__billsNative('done',100,'');
+  assert.equal(h.hooks.bl().rows.length,8);assert.equal(h.hooks.busy(),false);
+});
+
 /* ---------- wipe and navigation ---------- */
 
 test('wiping all data also clears the local bills and committee caches, including Java storage',async()=>{
