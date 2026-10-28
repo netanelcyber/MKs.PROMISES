@@ -32,6 +32,7 @@ public class MainActivity extends Activity {
     private BillsLoader bills;
     private InitiatorsLoader initiators;
     private LawsLoader laws;
+    private VotesLoader votes;
 
     /**
      * Quotes a string as a JavaScript string literal that is also safe inside an inline script.
@@ -83,6 +84,11 @@ public class MainActivity extends Activity {
         laws = new LawsLoader(new File(getFilesDir(), "laws"), KNESSET_ODATA, (state, skip, msg) ->
                 runOnUiThread(() -> web.evaluateJavascript(
                         "window.__lawsNative&&window.__lawsNative(" + jsq(state) + "," + skip + "," + jsq(msg) + ")", null)));
+
+        // The $skip loop over KNS_PlenumVote (plenum votes) also runs in Java.
+        votes = new VotesLoader(new File(getFilesDir(), "votes"), KNESSET_ODATA, (state, skip, msg) ->
+                runOnUiThread(() -> web.evaluateJavascript(
+                        "window.__votesNative&&window.__votesNative(" + jsq(state) + "," + skip + "," + jsq(msg) + ")", null)));
 
         web.addJavascriptInterface(new Bridge(), "Android");
         web.setWebViewClient(new WebViewClient() {
@@ -322,6 +328,31 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void wipeLaws() {
             laws.wipe();
+        }
+
+        @JavascriptInterface
+        public boolean startVotes(int knesset, boolean fresh) {
+            return votes.start(knesset, fresh);
+        }
+
+        @JavascriptInterface
+        public void stopVotes() {
+            votes.stop();
+        }
+
+        @JavascriptInterface
+        public String votesMeta() {
+            return votes.meta();
+        }
+
+        @JavascriptInterface
+        public String votesPage(int skip) {
+            return votes.page(skip);
+        }
+
+        @JavascriptInterface
+        public void wipeVotes() {
+            votes.wipe();
         }
 
         /** Opens the system share sheet with plain text (used for data export). */
