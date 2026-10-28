@@ -99,9 +99,10 @@ def convert(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--committee", type=int, required=True)
-    ap.add_argument("--from", dest="d_from", required=True, help="YYYY-MM-DD")
-    ap.add_argument("--to", dest="d_to", required=True, help="YYYY-MM-DD")
+    ap.add_argument("--committee", type=int, help="one committee id; omit to collect all committees of --knesset")
+    ap.add_argument("--knesset", type=int, default=25, help="Knesset number, used when --committee is omitted")
+    ap.add_argument("--from", dest="d_from", help="YYYY-MM-DD (optional)")
+    ap.add_argument("--to", dest="d_to", help="YYYY-MM-DD (optional)")
     ap.add_argument("--out", default="protocols")
     ap.add_argument("--base", default=BASE)
     ap.add_argument("--doc-type", default="פרוטוקול", help="substring of GroupTypeDesc to keep")
@@ -109,10 +110,13 @@ def main():
     ap.add_argument("--delay", type=float, default=0.5, help="seconds between downloads")
     a = ap.parse_args()
 
-    sess = odata(a.base, "KNS_CommitteeSession",
-                 f"CommitteeID eq {a.committee} and StartDate ge {a.d_from}T00:00:00Z and StartDate le {a.d_to}T23:59:59Z",
-                 "Id,StartDate")   # OData v4: the entity key is Id
-    print(f"{len(sess)} sessions of committee {a.committee} in range")
+    parts = [f"CommitteeID eq {a.committee}" if a.committee else f"KnessetNum eq {a.knesset}"]
+    if a.d_from:
+        parts.append(f"StartDate ge {a.d_from}T00:00:00Z")
+    if a.d_to:
+        parts.append(f"StartDate le {a.d_to}T23:59:59Z")
+    sess = odata(a.base, "KNS_CommitteeSession", " and ".join(parts), "Id,StartDate", max_rows=10**7)   # OData v4: the key is Id
+    print(f"{len(sess)} sessions in range")
     by_id = {s["Id"]: s["StartDate"][:10] for s in sess}
     docs = []
     ids = list(by_id)
