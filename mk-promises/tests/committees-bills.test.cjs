@@ -83,18 +83,18 @@ test('promise election and war markers are optional, validated, and never added 
   assert.deepEqual(clone(h.hooks.normalize(marked)),marked);
   const falseWar=fixture();falseWar.mks[0].promises[0].war=false;
   assert.equal('war' in h.hooks.normalize(falseWar).mks[0].promises[0],false);
-  for(const election of ['2020',5,{}]){const bad=fixture();bad.mks[0].promises[0].election=election;assert.throws(()=>h.hooks.normalize(bad))}
+  for(const election of ['1999',5,{}]){const bad=fixture();bad.mks[0].promises[0].election=election;assert.throws(()=>h.hooks.normalize(bad))}
   for(const war of ['yes',1,{}]){const bad=fixture();bad.mks[0].promises[0].war=war;assert.throws(()=>h.hooks.normalize(bad))}
 });
 
 test('the promise form records the election and war marker and the member page shows them without touching scoring',async()=>{
   const h=app();h.click('open',{id:'m1'});h.click('addPromise',{id:'m1'});
-  assert.equal(h.nodes.dlgForm.elements.election.value,'2022','new promises default to the 2022 election');
+  assert.equal(h.nodes.dlgForm.elements.election.value,'2026','new promises default to the 2026 election');
   assert.equal(h.nodes.dlgForm.elements.war.checked,false);
   h.submit({text:'נקצר את התור לרופא',topic:'בריאות',sourceUrl:'https://example.test/second',sourceDate:'2023-11-02',election:'2026',war:true,status:'unchecked'});await h.flush();
   const promise=h.record().mks[0].promises[1];
   assert.equal(promise.election,'2026');assert.equal(promise.war,true);assert.equal(h.written(KEY).mks[0].promises[1].war,true);
-  assert.match(h.html(),/בחירות 2026/);assert.match(h.html(),/נאמרה אחרי 7\.10\.2023/);assert.match(h.html(),/הושפעה מהמלחמה/);
+  assert.match(h.html(),/הכנסת ה-26/);assert.match(h.html(),/נאמרה אחרי 7\.10\.2023/);assert.match(h.html(),/הושפעה מהמלחמה/);
   assert.equal(scoring.scorePromise(promise).value,null);
   h.click('editPromise',{id:'m1',p:promise.id});assert.equal(h.nodes.dlgForm.elements.election.value,'2026');assert.equal(h.nodes.dlgForm.elements.war.checked,true);
   h.submit({war:false});await h.flush();assert.equal('war' in h.hooks.normalize(h.record()).mks[0].promises[1],false);

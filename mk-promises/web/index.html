@@ -73,7 +73,7 @@ var KEY='mk-promises-v1';
 var STATUS={unchecked:['לא נבדק','na'],kept:['קוימה','ok'],partial:['קוימה חלקית','part'],broken:['לא קוימה','bad'],unmeasurable:['לא ניתנת למדידה','na'],coalition:['הוגבלה בהסכם קואליציוני','coal']};
 var EFFECT={support:'מקדם את ההבטחה',contradict:'סותר את ההבטחה',context:'הקשר'};
 var EVTYPE=['הצעת חוק','הצבעה','נאום / התבטאות','ועדה','אחר'];
-var ELECTION={'2022':'בחירות 2022 (הכנסת ה-25)','2026':'בחירות 2026 (הכנסת ה-26)',other:'אחר'};
+var ELECTION={'2003':'הכנסת ה-16 (2003)','2006':'הכנסת ה-17 (2006)','2009':'הכנסת ה-18 (2009)','2013':'הכנסת ה-19 (2013)','2015':'הכנסת ה-20 (2015)','2019a':'הכנסת ה-21 (אפריל 2019)','2019b':'הכנסת ה-22 (ספטמבר 2019)','2020':'הכנסת ה-23 (2020)','2021':'הכנסת ה-24 (2021)','2022':'הכנסת ה-25 (2022)','2026':'הכנסת ה-26 (2026)',other:'אחר'};
 var PROTOCOL_SETTINGS_KEY='mk-promises-protocol-settings-v1',PROTOCOL_RESPONSE_LIMIT=524288;
 var protocolSettings=loadProtocolSettings(),protocolToken='',protocolSession=null;
 var protocolNativePending=Object.create(null),protocolNativeId=0;
@@ -667,24 +667,31 @@ function loadCommittees(win){
 }
 function promiseChips(p){
   var h='';
-  if(p.election==='2022')h+='<span class="chip">בחירות 2022</span>';
-  else if(p.election==='2026')h+='<span class="chip">בחירות 2026</span>';
+  if(p.election&&p.election!=='other'&&ELECTION[p.election])h+='<span class="chip">'+esc(ELECTION[p.election])+'</span>';
   if(p.sourceDate&&isoDate(p.sourceDate))h+='<span class="chip">'+(p.sourceDate<WAR_DAY?'נאמרה לפני 7.10.2023':'נאמרה אחרי 7.10.2023')+'</span>';
   if(p.war)h+='<span class="chip coal">הושפעה מהמלחמה</span>';
   return h;
 }
-function promises22(m,ids){
-  var p22=m.promises.filter(function(p){return p.election==='2022'});
-  var h='<h2>יחס להבטחות 2022</h2>';
-  if(!p22.length)return h+'<p class="mute">אין עדיין הבטחות מ-2022 לחבר הכנסת הזה. מוסיפים הבטחה ובוחרים "בחירות 2022".</p>';
-  return h+p22.map(function(p){
-    var topic=(p.topic||'').trim();
-    var rel=topic?ids.filter(function(cid){return cmtName(cid).indexOf(topic)>=0}):[];
-    var linked=(p.evidence||[]).filter(function(e){return e.type==='ועדה'}).length;
-    return'<div class="card"><div>'+esc(p.text)+'</div><div>'+promiseChips(p)+'</div><div class="mute">'+(topic?'נושא: '+esc(topic):'נושא לא הוגדר')+' · ראיות מסוג ועדה: '+linked
-      +(rel.length?' · הצעה לפי נושא: '+esc(rel.map(cmtName).join(', ')):'')+'</div>'
-      +(ids.length?'<button class="lnk" data-a="cmtToPromise" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">שיוך ועדה להבטחה</button>':'')+'</div>';
-  }).join('');
+function previousPromises(m,ids){
+  var prev=m.promises.filter(function(p){return p.election&&p.election!=='2026'&&p.election!=='other'});
+  var h='<h2>הבטחות לבוחר בערכות בחירות קודמות</h2>';
+  if(!prev.length)return h+'<p class="mute">אין הבטחות מערכות בחירות קודמות. מוסיפים הבטחה ובוחרים את מערכת הבחירות המתאימה.</p>';
+  var groups=Object.create(null);
+  prev.forEach(function(p){var k=p.election;if(!groups[k])groups[k]=[];groups[k].push(p)});
+  var keys=Object.keys(groups).sort();
+  keys.forEach(function(k){
+    h+='<h3>'+(ELECTION[k]||k)+'</h3>';
+    groups[k].forEach(function(p){
+      var topic=(p.topic||'').trim();
+      var rel=topic?ids.filter(function(cid){return cmtName(cid).indexOf(topic)>=0}):[];
+      var linked=(p.evidence||[]).filter(function(e){return e.type==='ועדה'}).length;
+      h+='<div class="card"><div>'+esc(p.text)+'</div><div>'+promiseChips(p)+'</div><div class="mute">'+(topic?'נושא: '+esc(topic):'נושא לא הוגדר')+' · ראיות מסוג ועדה: '+linked
+        +(rel.length?' · הצעה לפי נושא: '+esc(rel.map(cmtName).join(', ')):'')+'</div>'
+        +'<div class="row" style="margin-top:6px">'+(ids.length?'<button class="lnk" data-a="cmtToPromise" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">שיוך ועדה</button>':'')
+        +'<button class="sec" data-a="migratePromise" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">העברה ל-2026</button></div></div>';
+    });
+  });
+  return h;
 }
 function renderCmts(){
   var c=cm(),w=cmtWin();
@@ -719,15 +726,15 @@ function renderCmt(id){
 }
 function cmtSection(m){
   var pid=apiId(m.apiPersonId);if(!pid)return'';
-  if(!cm())return'<div class="row"><h2 class="grow">ועדות</h2><button class="sec" data-a="openCmts">טעינת ועדות</button></div>'+promises22(m,[]);
+  if(!cm())return'<div class="row"><h2 class="grow">ועדות</h2><button class="sec" data-a="openCmts">טעינת ועדות</button></div>'+previousPromises(m,[]);
   var w=cmtWin(),cnt=sessionCounts(),mine={};
   winRoles().filter(function(r){return r.p===pid}).forEach(function(r){(mine[r.c]=mine[r.c]||{})[r.d||'חבר']=1});
   var ids=Object.keys(mine).map(Number);
   var h='<div class="row"><h2 class="grow">ועדות</h2><button class="sec" data-a="openCmts">כל הוועדות</button></div><div class="mute">טווח: <bdi>'+esc(w.from)+'</bdi> עד <bdi>'+esc(w.to)+'</bdi></div>';
-  if(!ids.length)return h+'<p class="mute">לא נמצא תפקיד בוועדה בטווח.</p>'+promises22(m,[]);
+  if(!ids.length)return h+'<p class="mute">לא נמצא תפקיד בוועדה בטווח.</p>'+previousPromises(m,[]);
   var total=0;
   h+=ids.map(function(cid){total+=cnt[cid]||0;return'<div class="card"><button class="lnk" data-a="openCmt" data-id="'+cid+'">'+esc(cmtName(cid))+'</button><div class="mute">'+esc(Object.keys(mine[cid]).join(', '))+' · '+(cnt[cid]||0)+' ישיבות בטווח</div></div>'}).join('');
-  return h+'<p class="mute">סך ישיבות הוועדות שהוא חבר בהן: '+total+'. אלה ישיבות הוועדה ולא נוכחות אישית; נוכחות מופיעה בפרוטוקולים.</p>'+promises22(m,ids);
+  return h+'<p class="mute">סך ישיבות הוועדות שהוא חבר בהן: '+total+'. אלה ישיבות הוועדה ולא נוכחות אישית; נוכחות מופיעה בפרוטוקולים.</p>'+previousPromises(m,ids);
 }
 
 /* ---------- all bills: $skip loop, 100 rows per page ---------- */
@@ -1264,6 +1271,15 @@ var A={
       var saved=save();render();if(saved)toast('נוסף');
     });
   },
+  migratePromise:function(d){
+    var m=mk(d.id),p=m&&m.promises.find(function(x){return x.id===d.p});if(!p)return;
+    var src=ELECTION[p.election]||'ערכת בחירות קודמת';
+    confirmAction('להעביר את ההבטחה לבחירות 2026?\n\n"'+p.text.slice(0,80)+'"').then(function(yes){
+      if(!yes)return;
+      m.promises.push({id:uid(),text:p.text,topic:p.topic||'',sourceUrl:p.sourceUrl||'',sourceDate:p.sourceDate||'',election:'2026',status:'unchecked',note:'הועברה מ'+src,war:false,evidence:[]});
+      save();render();toast('ההבטחה הועברה לבחירות 2026');
+    });
+  },
   menu:function(){menu()}
 };
 function mkForm(m){
@@ -1273,7 +1289,7 @@ function mkForm(m){
     else{var n={id:uid(),name:o.name,faction:o.faction,knesset:o.knesset,isNew:o.isNew,promises:[],background:[]};S.mks.push(n);view={name:'mk',id:n.id}}
     save();render()})}
 function promiseForm(m,p){
-  ask(p?'עריכת הבטחה':'הבטחה חדשה',[{k:'text',label:'נוסח ההבטחה',type:'textarea',value:p&&p.text,required:true},{k:'topic',label:'נושא',value:p&&p.topic},{k:'sourceUrl',label:'קישור למקור',type:'url',value:p&&p.sourceUrl,required:true},{k:'sourceDate',label:'תאריך המקור',type:'date',value:p&&p.sourceDate},{k:'election',label:'מערכת בחירות',type:'select',options:Object.keys(ELECTION).map(function(k){return[k,ELECTION[k]]}),value:p?(p.election||'other'):'2022'},{k:'war',label:'ההבטחה הושפעה מהמלחמה (מאז 7.10.2023)',type:'checkbox',value:p&&p.war},{k:'status',label:'סטטוס',type:'select',options:statusOpts(),value:p?p.status:'unchecked'},{k:'note',label:'הערה',type:'textarea',value:p&&p.note}]).then(function(o){
+  ask(p?'עריכת הבטחה':'הבטחה חדשה',[{k:'text',label:'נוסח ההבטחה',type:'textarea',value:p&&p.text,required:true},{k:'topic',label:'נושא',value:p&&p.topic},{k:'sourceUrl',label:'קישור למקור',type:'url',value:p&&p.sourceUrl,required:true},{k:'sourceDate',label:'תאריך המקור',type:'date',value:p&&p.sourceDate},{k:'election',label:'מערכת בחירות',type:'select',options:Object.keys(ELECTION).map(function(k){return[k,ELECTION[k]]}),value:p?(p.election||'other'):'2026'},{k:'war',label:'ההבטחה הושפעה מהמלחמה (מאז 7.10.2023)',type:'checkbox',value:p&&p.war},{k:'status',label:'סטטוס',type:'select',options:statusOpts(),value:p?p.status:'unchecked'},{k:'note',label:'הערה',type:'textarea',value:p&&p.note}]).then(function(o){
     if(!o)return;
     if(p){Object.assign(p,o)}else{o.id=uid();o.evidence=[];m.promises.push(o)}
     save();render()})}
