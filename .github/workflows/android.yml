@@ -9,7 +9,50 @@ permissions:
   contents: write
 
 jobs:
+  checks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      selenium:
+        image: selenium/standalone-chromium:4.51.0-20261010
+        ports:
+          - 127.0.0.1:4444:4444
+        options: --shm-size=2g
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test Knesset query limits and error reporting
+        run: node --test mk-promises/tests/*.test.cjs
+      - name: Install protocol text readers
+        run: python -m pip install -r mk-promises/protocol-service/requirements.txt
+      - name: Wait for Selenium Grid
+        run: |
+          python - <<'PY'
+          import json, time, urllib.request
+          for attempt in range(30):
+              try:
+                  with urllib.request.urlopen('http://127.0.0.1:4444/status', timeout=3) as response:
+                      if json.load(response).get('value', {}).get('ready'):
+                          break
+              except Exception:
+                  pass
+              time.sleep(2)
+          else:
+              raise SystemExit('Selenium Grid did not become ready')
+          PY
+      - name: Test protocol extraction and a real Selenium session
+        env:
+          SELENIUM_TEST_URL: http://127.0.0.1:4444
+        run: python -m unittest discover -s mk-promises/protocol-service/tests -v
+
   apk:
+    needs: checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

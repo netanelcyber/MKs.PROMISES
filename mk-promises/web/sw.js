@@ -1,14 +1,15 @@
-const CACHE = 'mk-promises-v1';
-const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
+const CACHE_PREFIX = 'mk-promises-';
+const CACHE = CACHE_PREFIX + 'v3-protocols';
+const FILES = ['./', './index.html', './promise-scoring.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)));
-  self.skipWaiting();
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))));
-  self.clients.claim();
+  e.waitUntil(caches.keys()
+    .then((ks) => Promise.all(ks.filter((k) => k.startsWith(CACHE_PREFIX) && k !== CACHE).map((k) => caches.delete(k))))
+    .then(() => self.clients.claim()));
 });
 
 self.addEventListener('fetch', (e) => {
@@ -17,10 +18,13 @@ self.addEventListener('fetch', (e) => {
   e.respondWith(
     fetch(e.request)
       .then((r) => {
-        const copy = r.clone();
-        caches.open(CACHE).then((c) => c.put(e.request, copy));
+        if (r.ok) {
+          const copy = r.clone();
+          e.waitUntil(caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {}));
+        }
         return r;
       })
-      .catch(() => caches.match(e.request))
+      .catch(async () => (await caches.match(e.request)) ||
+        (e.request.mode === 'navigate' && await caches.match('./index.html')) || Response.error())
   );
 });

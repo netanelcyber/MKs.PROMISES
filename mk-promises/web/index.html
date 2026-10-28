@@ -13,8 +13,8 @@
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Hebrew",Arial,sans-serif}
 body{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
-header{position:sticky;top:0;z-index:5;background:var(--brand);color:var(--brand-ink);padding:12px 16px;display:flex;align-items:center;gap:10px}
-header h1{font-size:18px;margin:0;flex:1}
+header{position:sticky;top:0;z-index:5;background:var(--brand);color:var(--brand-ink);padding:12px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+header h1{font-size:18px;margin:0;flex:1;min-width:0}
 header button{background:transparent;color:inherit;border:1px solid rgba(255,255,255,.5);border-radius:8px;padding:6px 10px;font:inherit;font-size:14px}
 main{padding:16px;max-width:720px;margin:0 auto}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin:0 0 12px}
@@ -43,6 +43,13 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .ev.support{border-color:var(--ok)}.ev.contradict{border-color:var(--bad)}
 a{color:var(--brand);word-break:break-all}
 .note{font-size:13px;color:var(--mute);margin-top:24px;border-top:1px solid var(--line);padding-top:12px}
+.api-error{border-inline-start:4px solid var(--bad)}
+.api-error .mute{overflow-wrap:anywhere}
+.api-error details{margin-top:10px}
+.api-error pre{direction:ltr;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;font-size:12px;user-select:text}
+.protocol-text{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:45vh;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:10px;user-select:text}
+.protocol-quote{white-space:pre-wrap;overflow-wrap:anywhere;border-inline-start:3px solid var(--line);padding:6px 10px;margin:8px 0}
+button:disabled{opacity:.55;cursor:wait}
 #toast{position:fixed;inset-inline:16px;bottom:calc(16px + env(safe-area-inset-bottom));background:#222;color:#fff;border-radius:10px;padding:10px 14px;display:none;z-index:20}
 </style>
 </head>
@@ -50,12 +57,14 @@ a{color:var(--brand);word-break:break-all}
 <header>
   <button id="backBtn" hidden aria-label="חזרה">→ חזרה</button>
   <h1 id="title">מעקב הבטחות</h1>
+  <button data-a="protocolSettings">פרוטוקולים</button>
   <button data-a="menu">⋮ גיבוי</button>
 </header>
 <main id="app"></main>
 <div id="toast" role="status"></div>
 <dialog id="dlg"><form method="dialog" id="dlgForm"></form></dialog>
 
+<script src="promise-scoring.js"></script>
 <script>
 (function(){
 'use strict';
@@ -64,11 +73,15 @@ var KEY='mk-promises-v1';
 var STATUS={unchecked:['לא נבדק','na'],kept:['קוימה','ok'],partial:['קוימה חלקית','part'],broken:['לא קוימה','bad'],unmeasurable:['לא ניתנת למדידה','na'],coalition:['הוגבלה בהסכם קואליציוני','coal']};
 var EFFECT={support:'מקדם את ההבטחה',contradict:'סותר את ההבטחה',context:'הקשר'};
 var EVTYPE=['הצעת חוק','הצבעה','נאום / התבטאות','ועדה','אחר'];
+var PROTOCOL_SETTINGS_KEY='mk-promises-protocol-settings-v1',PROTOCOL_RESPONSE_LIMIT=524288;
+var protocolSettings=loadProtocolSettings(),protocolToken='',protocolSession=null;
+var protocolNativePending=Object.create(null),protocolNativeId=0;
 var recoveryBackup=null,loadWarning='';
 var S=load();
 var view={name:'list'};
 var F={q:'',faction:'',onlyNew:false};
 var bills=Object.create(null); // mkId -> loaded bills
+var apiFailure=null; // Temporary diagnostics only; never part of saved records or backups.
 
 function uid(){return Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-4)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]})}
@@ -102,7 +115,10 @@ function normalizeState(value){
     if(typeof k!=='string')throw new Error('מספר כנסת לא תקין');
     var member={id:id,name:text(m,'name',true),faction:text(m,'faction'),knesset:k,isNew:m.isNew===true,
       promises:entries(m.promises,function(p,pid){return{id:pid,text:text(p,'text',true),topic:text(p,'topic'),sourceUrl:url(p,'sourceUrl'),sourceDate:text(p,'sourceDate'),status:choice(p,'status',STATUS,'unchecked'),note:text(p,'note'),
-        evidence:entries(p.evidence,function(e,eid){return{id:eid,title:text(e,'title',true),type:text(e,'type')||'אחר',effect:choice(e,'effect',EFFECT,'context'),date:text(e,'date'),url:url(e,'url')}})}}),
+        evidence:entries(p.evidence,function(e,eid){var evidence={id:eid,title:text(e,'title',true),type:text(e,'type')||'אחר',effect:choice(e,'effect',EFFECT,'context'),date:text(e,'date'),url:url(e,'url')};
+          if(e.excerpt!=null)evidence.excerpt=boundedProtocolString(text(e,'excerpt'),4000);
+          if(e.protocol!=null){evidence.protocol=validateProtocolMetadata(e.protocol);if(!evidence.excerpt||evidence.type!=='ועדה'||officialProtocolUrl(evidence.url)!==evidence.protocol.sourceUrl)throw new Error('ראיית פרוטוקול אינה תקינה')}
+          return evidence})}}),
       background:entries(m.background,function(b,bid){return{id:bid,title:text(b,'title',true),period:text(b,'period'),url:url(b,'url'),note:text(b,'note')}})};
     if(m.apiPersonId!=null&&m.apiPersonId!==''){
       var personId=apiId(m.apiPersonId);
@@ -132,16 +148,272 @@ function toast(t){var el=document.getElementById('toast');el.textContent=t;el.st
 function okUrl(u){try{if(typeof u!=='string'||!/^https?:\/\//i.test(u)||/\s/.test(u))return false;var parsed=new URL(u);return /^https?:$/.test(parsed.protocol)&&!!parsed.hostname}catch(e){return false}}
 function link(u){return okUrl(u)?'<a href="'+esc(u)+'" target="_blank" rel="noopener">'+esc(u.replace(/^https?:\/\//,'').slice(0,60))+'</a>':''}
 
+/* ---------- explicit committee-protocol reader ---------- */
+function officialProtocolUrl(value){
+  if(typeof value!=='string'||!value||value.length>4096||/\s/.test(value))throw new Error('נדרש קישור HTTPS רשמי של הכנסת');
+  var u;try{u=new URL(value)}catch(e){throw new Error('קישור המקור אינו תקין')}
+  if(u.protocol!=='https:'||u.username||u.password||(u.port&&u.port!=='443')||!(u.hostname==='knesset.gov.il'||u.hostname.endsWith('.knesset.gov.il')))throw new Error('אפשר לקרוא רק קישורי HTTPS רשמיים תחת knesset.gov.il, ללא פרטי גישה או יציאה מותאמת');
+  u.hash='';if(u.href.length>4096)throw new Error('קישור המקור ארוך מדי לאחר קידוד');return u.href;
+}
+function protocolServiceUrl(value){
+  if(typeof value!=='string'||value.length>2048)throw new Error('כתובת השירות אינה תקינה');
+  value=value.trim();if(!value)return'';
+  var u;try{u=new URL(value)}catch(e){throw new Error('יש להזין כתובת שירות מלאה')}
+  var loopback=u.hostname==='localhost'||u.hostname==='127.0.0.1'||u.hostname==='[::1]';
+  if(/\s/.test(value)||u.username||u.password||u.search||u.hash||!(u.protocol==='https:'||(u.protocol==='http:'&&loopback)))throw new Error('נדרש שירות HTTPS; HTTP מותר רק ב-localhost לפיתוח בדפדפן');
+  var endpoint=u.origin+u.pathname.replace(/\/+$/,'');if(endpoint.length>2048)throw new Error('כתובת השירות ארוכה מדי');return endpoint;
+}
+function loadProtocolSettings(){
+  try{var value=JSON.parse(localStorage.getItem(PROTOCOL_SETTINGS_KEY)||'{}');return{endpoint:protocolServiceUrl(value.endpoint||'')}}catch(e){return{endpoint:''}}
+}
+function boundedProtocolString(value,max,nullable){
+  if(nullable&&value===null)return null;
+  if(typeof value!=='string'||value.length>max*2||Array.from(value).length>max)throw new Error('שדה בתשובת הפרוטוקול אינו תקין');
+  return value;
+}
+function validateProtocolMetadata(value){
+  if(!value||typeof value!=='object'||Array.isArray(value)||['html','pdf','docx','doc'].indexOf(value.kind)<0)throw new Error('פרטי הפרוטוקול אינם תקינים');
+  var retrievedAt=boundedProtocolString(value.retrievedAt,80);
+  if(!/^\d{4}-\d{2}-\d{2}T/.test(retrievedAt)||!Number.isFinite(Date.parse(retrievedAt)))throw new Error('זמן קריאת הפרוטוקול אינו תקין');
+  return{sourceUrl:officialProtocolUrl(value.sourceUrl),title:boundedProtocolString(value.title,300),committee:boundedProtocolString(value.committee,200,true),date:boundedProtocolString(value.date,80,true),retrievedAt:retrievedAt,kind:value.kind};
+}
+function validateProtocolResult(value,expectedUrl){
+  if(!value||typeof value!=='object'||Array.isArray(value)||['page','html','pdf','docx','doc'].indexOf(value.kind)<0||typeof value.isProtocol!=='boolean'||typeof value.truncated!=='boolean'||(value.kind==='page'&&value.isProtocol)||!Array.isArray(value.documents)||value.documents.length>50||!Array.isArray(value.warnings)||value.warnings.length>8)throw new Error('תשובת שירות הפרוטוקולים אינה תקינה');
+  var sourceUrl=officialProtocolUrl(value.sourceUrl),finalUrl=officialProtocolUrl(value.finalUrl);
+  if(sourceUrl!==officialProtocolUrl(expectedUrl))throw new Error('כתובת המקור בתשובה אינה תואמת לבקשה');
+  var result={sourceUrl:sourceUrl,finalUrl:finalUrl,title:boundedProtocolString(value.title,300),committee:boundedProtocolString(value.committee,200,true),date:boundedProtocolString(value.date,80,true),text:boundedProtocolString(value.text,100000),kind:value.kind,isProtocol:value.isProtocol,truncated:value.truncated,retrievedAt:boundedProtocolString(value.retrievedAt,80),documents:[],warnings:[]};
+  if(result.isProtocol&&!result.text.trim())throw new Error('לא התקבל טקסט קריא מהפרוטוקול');
+  if(!/^\d{4}-\d{2}-\d{2}T/.test(result.retrievedAt)||!Number.isFinite(Date.parse(result.retrievedAt)))throw new Error('זמן הקריאה בתשובה אינו תקין');
+  result.documents=value.documents.map(function(doc){
+    if(!doc||typeof doc!=='object'||['pdf','docx','doc','html'].indexOf(doc.format)<0)throw new Error('קישור מסמך בתשובה אינו תקין');
+    return{url:officialProtocolUrl(doc.url),title:boundedProtocolString(doc.title,300),format:doc.format};
+  });
+  result.warnings=value.warnings.map(function(warning){return boundedProtocolString(warning,300)});
+  return result;
+}
+function showProtocolSettings(){
+  return ask('שירות קריאת פרוטוקולים',[
+    {k:'endpoint',label:'כתובת בסיס של שירות הקריאה (אופציונלי)',type:'url',value:protocolSettings.endpoint},
+    {k:'token',label:'אסימון גישה לשירות (אופציונלי; בזיכרון בלבד)',type:'password',value:protocolToken}
+  ],'שמירת הגדרות',{
+    intro:'נדרש שרת קריאה שהוגדר עם Selenium. הקריאה מתחילה רק אחרי בחירת מקור ולחיצה על ״קריאה״; אין שרת ציבורי מוגדר כברירת מחדל.',
+    content:'<p class="mute">השירות מקבל רק את קישור המקור הרשמי. הוא קורא דף או מסמך ומחזיר טקסט מקור, ללא סיכום או קביעה שחבר כנסת מסוים דיבר. דף דיון אינו נחשב לפרוטוקול: בוחרים קישור למסמך וקוראים אותו בנפרד.</p><p class="mute">כתובת השירות נשמרת במכשיר בנפרד מהגיבוי. אסימון הגישה נשאר בזיכרון עד סגירת העמוד ואינו נשמר או מיוצא. השירות משתמש ב-<span dir="ltr">/api/protocols</span>. ב-APK נדרש HTTPS; בפיתוח בדפדפן אפשר HTTP ב-localhost והגדרת CORS מתאימה בשרת.</p><p class="mute"><a href="https://main.knesset.gov.il/Activity/committees/pages/allcommitteeprotocols.aspx" target="_blank" rel="noopener">מאגר הפרוטוקולים הרשמי של הכנסת</a></p>',
+    validate:function(o){try{protocolServiceUrl(o.endpoint);if(!/^[\x21-\x7e]{0,512}$/.test(o.token))return'אסימון השירות חייב להכיל עד 512 תווי ASCII גלויים, ללא רווחים'}catch(e){return e.message}}
+  }).then(function(o){
+    if(!o)return false;protocolSettings={endpoint:protocolServiceUrl(o.endpoint)};protocolToken=o.token;
+    try{localStorage.setItem(PROTOCOL_SETTINGS_KEY,JSON.stringify(protocolSettings));toast('הגדרות השירות נשמרו; האסימון נשאר בזיכרון בלבד')}catch(e){toast('ההגדרות זמינות לעמוד הנוכחי בלבד; השמירה המקומית נכשלה')}
+    return true;
+  });
+}
+function protocolHttpError(status,body){
+  var detail='';try{var parsed=JSON.parse(body);if(parsed&&parsed.error&&typeof parsed.error.message==='string')detail=parsed.error.message.slice(0,600)}catch(e){}
+  if(detail)return detail;
+  if(status===401||status===403)return'שירות הקריאה דחה את הגישה. בדקו את ההרשאות, אסימון השירות וקישור המקור';
+  if(status===413)return'המסמך או תשובת השירות גדולים מדי';
+  if(status===422)return'לא ניתן לחלץ טקסט מהמסמך; ייתכן שנדרש OCR או שהמסמך מוגן';
+  if(status===503)return'שירות הקריאה אינו זמין או עסוק. נסו שוב בהמשך';
+  if(status===504)return'שירות הקריאה חרג מזמן ההמתנה למקור';
+  return status?'שירות הקריאה החזיר שגיאה HTTP '+status:'לא ניתן להתחבר לשירות קריאת הפרוטוקולים';
+}
+function readProtocolResponse(response){
+  if(response.headers&&Number(response.headers.get('content-length'))>PROTOCOL_RESPONSE_LIMIT)return Promise.reject(new Error('תשובת שירות הקריאה גדולה מדי'));
+  if(response.body&&response.body.getReader){
+    var reader=response.body.getReader(),decoder=new TextDecoder(),parts=[],size=0;
+    function step(){return reader.read().then(function(chunk){
+      if(chunk.done)return parts.join('')+decoder.decode();size+=chunk.value.byteLength;
+      if(size>PROTOCOL_RESPONSE_LIMIT){reader.cancel();throw new Error('תשובת שירות הקריאה גדולה מדי')}
+      parts.push(decoder.decode(chunk.value,{stream:true}));return step();
+    })}return step();
+  }
+  return response.text().then(function(text){if(text.length>PROTOCOL_RESPONSE_LIMIT||new TextEncoder().encode(text).length>PROTOCOL_RESPONSE_LIMIT)throw new Error('תשובת שירות הקריאה גדולה מדי');return text});
+}
+window.__protocolNativeDone=function(id,ok,status,b64){
+  var pending=protocolNativePending[id];if(!pending)return;
+  try{
+    if(typeof b64!=='string'||b64.length>Math.ceil(PROTOCOL_RESPONSE_LIMIT/3)*4+4)throw new Error('תשובת השירות גדולה מדי');
+    var bytes=Uint8Array.from(atob(b64),function(c){return c.charCodeAt(0)});if(bytes.length>PROTOCOL_RESPONSE_LIMIT)throw new Error('תשובת השירות גדולה מדי');
+    var text=new TextDecoder().decode(bytes);if(!ok)pending.reject(new Error(protocolHttpError(status,text)));else pending.resolve(text);
+  }catch(e){pending.reject(new Error('לא ניתן לפענח את תשובת שירות הפרוטוקולים'))}
+};
+function requestProtocol(source){
+  return new Promise(function(resolve,reject){
+    var sourceUrl,endpoint;try{sourceUrl=officialProtocolUrl(source);endpoint=protocolServiceUrl(protocolSettings.endpoint);if(!endpoint)throw new Error('יש להגדיר תחילה כתובת שירות קריאת פרוטוקולים')}catch(e){reject(e);return}
+    var body=JSON.stringify({url:sourceUrl}),id=0,done=false,controller=null;
+    function finish(error,result){if(done)return;done=true;clearTimeout(timer);if(id)delete protocolNativePending[id];if(error)reject(error);else resolve(result)}
+    function accept(raw){try{finish(null,validateProtocolResult(JSON.parse(raw),sourceUrl))}catch(e){finish(new Error('תשובת שירות הפרוטוקולים אינה תקינה: '+e.message))}}
+    var timer=setTimeout(function(){finish(new Error('זמן ההמתנה לקריאת הפרוטוקול הסתיים. נסו שוב'));if(controller)controller.abort()},90000);
+    var url=endpoint+'/api/protocols';
+    if(window.Android&&window.Android.httpReadProtocol){
+      if(!/^https:/.test(url)){finish(new Error('ב-APK נדרשת כתובת שירות HTTPS'));return}
+      id=++protocolNativeId;protocolNativePending[id]={resolve:accept,reject:function(e){finish(e)}};
+      try{window.Android.httpReadProtocol(id,url,protocolToken,body)}catch(e){finish(new Error('לא ניתן להפעיל את שירות קריאת הפרוטוקולים באפליקציה'))}return;
+    }
+    var headers={'Content-Type':'application/json','Accept':'application/json'};if(protocolToken)headers.Authorization='Bearer '+protocolToken;
+    var options={method:'POST',headers:headers,body:body,credentials:'omit',mode:'cors',redirect:'error',cache:'no-store',referrerPolicy:'no-referrer'};
+    if(typeof AbortController==='function'){controller=new AbortController();options.signal=controller.signal}
+    try{fetch(url,options).then(function(response){return readProtocolResponse(response).then(function(text){if(!response.ok)throw new Error(protocolHttpError(response.status,text));return text})}).then(accept,function(e){finish(new Error(e instanceof TypeError?'לא ניתן להתחבר לשירות. בדקו את כתובת השירות ואת הגדרת CORS':e.message))})}catch(e){finish(new Error('קריאת הפרוטוקולים אינה זמינה בדפדפן הזה'))}
+  });
+}
+function protocolContextCurrent(session){return S.mks.indexOf(session.member)>=0&&session.member.promises.indexOf(session.promise)>=0&&session.promise.text===session.promiseText}
+function readProtocolForm(m){
+  if(!m||!m.promises.length){toast('הוסיפו הבטחה לפני שיוך פרוטוקול');return}
+  if(protocolSession&&protocolSession.loading){toast('קריאת מקור כבר מתבצעת; המתינו לסיום');return}
+  if(!protocolSettings.endpoint){showProtocolSettings().then(function(saved){if(saved&&protocolSettings.endpoint&&S.mks.indexOf(m)>=0)readProtocolForm(m)});return}
+  ask('קריאת פרוטוקול ועדה',[
+    {k:'p',label:'הבטחה שאליה רוצים לבדוק קשר',type:'select',options:m.promises.map(function(p){return[p.id,p.text.slice(0,100)]})},
+    {k:'url',label:'קישור רשמי לדף הדיון או למסמך הפרוטוקול',type:'url',required:true}
+  ],'קריאה',{
+    intro:'יישלח לשירות רק קישור המקור. הקריאה אינה מוסיפה ראיה, אינה מייחסת אמירה לחבר הכנסת ואינה משנה סטטוס או ציון.',
+    validate:function(o){try{officialProtocolUrl(o.url)}catch(e){return e.message}}
+  }).then(function(o){
+    if(!o||S.mks.indexOf(m)<0)return;var p=m.promises.find(function(item){return item.id===o.p});if(!p)return;
+    startProtocolRead({member:m,promise:p,promiseText:p.text},o.url);
+  });
+}
+function startProtocolRead(context,url){
+  if(protocolSession&&protocolSession.loading){toast('קריאת מקור כבר מתבצעת');return}
+  var session={member:context.member,promise:context.promise,promiseText:context.promiseText,url:url,loading:true,result:null,error:''};
+  if(!protocolContextCurrent(session)){toast('ההבטחה השתנתה או הוסרה; בחרו מקור מחדש');return}
+  protocolSession=session;render();
+  requestProtocol(url).then(function(result){
+    if(protocolSession!==session)return;
+    if(!protocolContextCurrent(session)){protocolSession=null;render();toast('ההבטחה השתנתה או הוסרה; הקריאה לא שויכה');return}
+    session.loading=false;session.result=result;render();
+    if(!dialogActive&&view.name==='mk'&&view.id===session.member.id)showProtocolResult();else toast('המקור נקרא; אפשר לעיין בו בכרטיס חבר הכנסת');
+  },function(e){
+    if(protocolSession!==session)return;
+    if(!protocolContextCurrent(session)){protocolSession=null;render();return}
+    session.loading=false;session.error=String(e.message||'קריאת המקור נכשלה').slice(0,900);render();toast(session.error);
+  });
+}
+function protocolReaderMarkup(m){
+  var session=protocolSession;if(!session||session.member!==m)return'';
+  if(session.loading)return'<div class="card" role="status"><h3>קורא את המקור…</h3><p class="mute">'+esc(session.promiseText.slice(0,160))+'</p><p class="mute">השרת עשוי להזדקק לעד כדקה לפתיחת דף הכנסת או המסמך.</p></div>';
+  if(session.error)return'<div class="card api-error" role="alert"><h3>קריאת המקור נכשלה</h3><p class="mute">'+esc(session.error)+'</p><div class="row"><button class="sec" data-a="retryProtocol">ניסיון חוזר</button><button class="lnk" data-a="dismissProtocol">סגירה</button></div></div>';
+  if(!session.result)return'';
+  return'<div class="card"><h3>'+esc(session.result.isProtocol?'טקסט פרוטוקול מוכן לעיון':'המקור נקרא; יש לבחור מסמך פרוטוקול')+'</h3><p class="mute">'+esc(session.result.title)+'</p><div class="row"><button class="sec" data-a="reviewProtocol">'+(session.result.isProtocol?'עיון ובחירת ציטוט':'עיון ובחירת מסמך')+'</button><button class="lnk" data-a="dismissProtocol">סגירה</button></div></div>';
+}
+function showProtocolResult(){
+  var session=protocolSession;if(!session||!session.result||session.loading)return;
+  if(!protocolContextCurrent(session)){protocolSession=null;render();toast('ההבטחה השתנתה; יש לקרוא מחדש');return}
+  var result=session.result,characters=Array.from(result.text),preview=characters.slice(0,12000).join(''),m=session.member;
+  var content='<h3>'+esc(result.title||'מקור הכנסת')+'</h3><p class="mute">'+(result.committee?esc(result.committee)+' · ':'')+(result.date?esc(result.date)+' · ':'')+link(result.finalUrl)+'</p>';
+  result.warnings.forEach(function(warning){content+='<p class="mute">'+esc(warning)+'</p>'});
+  if(result.truncated)content+='<p class="mute">השירות החזיר טקסט חלקי בשל מגבלת אורך. בדקו את המסמך המלא במקור.</p>';
+  if(characters.length>12000)content+='<p class="mute">בתצוגה מופיעים 12,000 התווים הראשונים בלבד. אפשר לפתוח את המקור המלא בקישור.</p>';
+  content+='<pre id="protocolPreview" class="protocol-text" dir="auto" tabindex="0" aria-label="טקסט המקור לקריאה ולהעתקה"></pre>';
+  var options={content:content,onOpen:function(){var el=document.getElementById('protocolPreview');if(el)el.textContent=preview}};
+  if(!result.isProtocol){
+    options.intro='המקור לא זוהה כפרוטוקול. דף דיון או מסמך רקע אינם ראיה לאמירה בוועדה. בחרו מסמך מקור לקריאה נוספת.';
+    if(!result.documents.length)options.content+='<p class="mute">לא נמצאו קישורי מסמך מתאימים. אפשר להעתיק קישור למסמך מתוך אתר הכנסת ולהתחיל קריאה חדשה.</p>';
+    ask('בחירת מסמך מקור',result.documents.length?[{k:'doc',label:'מסמך רשמי לקריאה',type:'select',options:result.documents.map(function(doc,index){return[String(index),(doc.title||doc.url).slice(0,180)+' · '+doc.format]})}]:[],result.documents.length?'קריאת המסמך שנבחר':'סגירה',options).then(function(o){
+      if(!o||protocolSession!==session||!result.documents.length)return;var index=Number(o.doc);if(Number.isInteger(index)&&index>=0&&index<result.documents.length)startProtocolRead(session,result.documents[index].url);
+    });return;
+  }
+  options.intro='זהו טקסט מקור שחולץ מהפרוטוקול, לא סיכום. העתיקו קטע מדויק ובדקו את שמות הדוברים ואת הקשרו. שיוך הקטע להבטחה אינו קובע שחבר הכנסת אמר אותו.';
+  options.validate=function(o){
+    if(!o.title.trim()||Array.from(o.title).length>300)return'תיאור הראיה חייב להכיל עד 300 תווים';
+    if(Array.from(o.excerpt).length>4000)return'בחרו ציטוט באורך של עד 4,000 תווים';
+    if(result.text.replace(/\r\n?/g,'\n').indexOf(o.excerpt.replace(/\r\n?/g,'\n'))<0)return'הציטוט חייב להיות קטע מדויק מטקסט המקור שנקרא';
+  };
+  var choices=m.promises.map(function(p){return{promise:p,text:p.text}});
+  ask('בחירת ציטוט ושיוך להבטחה',[
+    {k:'p',label:'הבטחה',type:'select',value:session.promise.id,options:choices.map(function(item){return[item.promise.id,item.text.slice(0,100)]})},
+    {k:'title',label:'תיאור הראיה',value:result.title||'ציטוט מפרוטוקול ועדה',required:true},
+    {k:'excerpt',label:'ציטוט מדויק מהטקסט',type:'textarea',required:true},
+    {k:'effect',label:'השפעה לפי בדיקת המקור',type:'select',value:'context',options:[['context',EFFECT.context],['support',EFFECT.support],['contradict',EFFECT.contradict]]},
+    {k:'reviewed',label:'קראתי את הקטע ובדקתי את המקור ואת ההקשר להבטחה',type:'checkbox',required:true}
+  ],'הוספת הציטוט כראיה',options).then(function(o){
+    if(!o)return;var selected=choices.find(function(item){return item.promise.id===o.p}),p=selected&&selected.promise;
+    if(protocolSession!==session||!protocolContextCurrent(session)||!p||m.promises.indexOf(p)<0||p.text!==selected.text){toast('ההבטחה השתנתה או הוסרה; הציטוט לא נשמר');return}
+    var metadata=validateProtocolMetadata({sourceUrl:result.finalUrl,title:result.title,committee:result.committee,date:result.date,retrievedAt:result.retrievedAt,kind:result.kind});
+    var evidence={id:uid(),title:o.title,type:'ועדה',effect:o.effect,date:result.date&&/^\d{4}-\d{2}-\d{2}$/.test(result.date)?result.date:'',url:result.finalUrl,excerpt:o.excerpt.replace(/\r\n?/g,'\n'),protocol:metadata};
+    p.evidence=p.evidence||[];p.evidence.push(evidence);var saved=save();render();if(saved)toast('הציטוט שויך להבטחה; הסטטוס לא שונה');
+  });
+}
+
+/* ---------- persistent API diagnostics ---------- */
+function apiDiagnosticText(value,max){return typeof value==='string'?(value.length>max?value.slice(0,max-2)+'\n…':value):''}
+function apiDiagnosticUrl(value){
+  if(typeof value!=='string'||value.length>8192)return'';
+  try{
+    var u=new URL(value);if(!/^https?:$/.test(u.protocol))return'';
+    u.username='';u.password='';u.hash='';
+    Array.from(u.searchParams.keys()).forEach(function(key){if(/token|secret|password|authorization|api[-_]?key/i.test(key))u.searchParams.set(key,'[redacted]')});
+    return apiDiagnosticText(u.href,4096);
+  }catch(e){return''}
+}
+function reportApiError(action,error,context){
+  error=error||{};context=context||{};
+  var status=Number(error.status);
+  apiFailure={action:action==='bills'?'bills':'members',context:{k:apiId(context.k)||25,id:typeof context.id==='string'?context.id:''},
+    status:Number.isInteger(status)&&status>=100&&status<=599?status:0,
+    entity:apiDiagnosticText(error.entity,100),message:apiDiagnosticText(error.message,600)||'הטעינה ממאגר הכנסת נכשלה',
+    detail:apiDiagnosticText(error.detail,1500),url:apiDiagnosticUrl(error.url),responseBody:apiDiagnosticText(error.responseBody,8192)};
+  render();
+  var card=document.getElementById('apiFailure');if(card&&card.scrollIntoView)card.scrollIntoView({block:'nearest'});
+}
+function renderApiFailure(){
+  var failure=apiFailure;if(!failure)return'';
+  var title=failure.action==='bills'?'טעינת הצעות החוק נכשלה':'טעינת חברי הכנסת נכשלה';
+  var canRetry=failure.action==='members'?recoveryBackup===null:!!mk(failure.context.id);
+  var h='<section class="card api-error" id="apiFailure" role="alert" aria-labelledby="apiFailureTitle"><h3 id="apiFailureTitle">'+title+'</h3>'
+    +'<div class="mute">'+(failure.entity?'מאגר: <span dir="ltr">'+esc(failure.entity)+'</span> · ':'')+(failure.status?'<span dir="ltr">HTTP '+failure.status+'</span>':'לא התקבלה תשובת HTTP תקינה')+'</div>'
+    +'<p class="mute">'+esc(failure.message)+'</p>';
+  if(failure.detail&&failure.detail!==failure.message)h+='<p class="mute">'+esc(failure.detail)+'</p>';
+  h+='<div class="row">'+(canRetry?'<button class="sec" data-a="retryApi">ניסיון חוזר</button>':'')+'<button class="lnk" data-a="dismissApi">סגירת ההודעה</button></div>';
+  if(failure.url||failure.responseBody){
+    h+='<details><summary>פרטי הבקשה ותשובת השרת (אפשר להעתיק)</summary>';
+    if(failure.url)h+='<div class="mute">כתובת הבקשה</div><pre>'+esc(failure.url)+'</pre>';
+    if(failure.responseBody)h+='<div class="mute">תשובת השרת — עד 8,192 תווים</div><pre>'+esc(failure.responseBody)+'</pre>';
+    h+='</details>';
+  }
+  return h+'</section>';
+}
+function clearApiFailure(action,id){
+  if(!apiFailure||(action&&(apiFailure.action!==action||(action==='bills'&&apiFailure.context.id!==id))))return;
+  apiFailure=null;render();
+}
+function retryApiFailure(){
+  var failure=apiFailure;if(!failure)return;
+  if(failure.action==='bills'){
+    var member=mk(failure.context.id);if(!member){toast('חבר הכנסת אינו נמצא עוד ברשימה');return}
+    clearApiFailure();return loadBills(member);
+  }
+  clearApiFailure();return loadMembers(failure.context.k);
+}
+
 /* ---------- network: native bridge on Android, fetch in browser ---------- */
-var pending={},nid=0,NETWORK_TIMEOUT=45000;
+var pending={},nid=0,NETWORK_TIMEOUT=45000,API_ID_BATCH_SIZE=10,API_CONCURRENCY=3;
 function apiUrl(url,base){
   var u=new URL(url,base||BASE),root=new URL(BASE);
   if(u.origin!==root.origin||u.username||u.password||u.pathname.indexOf(root.pathname)!==0)throw new Error('כתובת לא תקינה של מאגר הכנסת');
   u.hash='';return u.href;
 }
+function makeApiError(status,url,body,fallback){
+  var raw=String(body==null?'':body).slice(0,8192),detail='',entity='';
+  try{
+    var parsed=JSON.parse(raw),error=parsed&&parsed.error;
+    if(error&&typeof error.message==='string')detail=error.message;
+    else if(error&&error.message&&typeof error.message.value==='string')detail=error.message.value;
+  }catch(e){}
+  if(!detail&&fallback)detail=fallback;
+  if(!detail&&raw.trim()&&!/^\s*</.test(raw))detail=raw;
+  if(!detail)detail=fallback||(/^\s*</.test(raw)?'השרת החזיר דף HTML במקום הודעת JSON':'השרת לא סיפק פרטי שגיאה');
+  detail=detail.replace(/[\u0000-\u001f\u007f]+/g,' ').replace(/\s+/g,' ').trim().slice(0,1200);
+  try{entity=new URL(url,BASE).pathname.slice(new URL(BASE).pathname.length).split('/')[0]}catch(e){}
+  var code=Number(status)||0;
+  var out=new Error((entity?entity+' · ':'')+(code?'HTTP '+code:'שגיאת חיבור')+' — '+detail);
+  out.name='KnessetApiError';out.status=code;out.url=String(url||'');out.entity=entity;
+  out.detail=detail;out.responseBody=raw;return out;
+}
 window.__nativeDone=function(id,ok,status,b64){var p=pending[id];if(!p)return;
-  if(!ok){p.rej(new Error(status?'HTTP '+status:'החיבור לשרת הכנסת נכשל או נחסם'));return}
-  try{p.res(new TextDecoder().decode(Uint8Array.from(atob(b64),function(c){return c.charCodeAt(0)})))}catch(e){p.rej(e)}};
+  var body;
+  try{body=new TextDecoder().decode(Uint8Array.from(atob(b64),function(c){return c.charCodeAt(0)}))}
+  catch(e){p.rej(makeApiError(status,p.url,'','לא ניתן לפענח את תשובת השרת'));return}
+  if(!ok){p.rej(makeApiError(status,p.url,body,body.trim()?'':'החיבור לשרת הכנסת נכשל או נחסם'));return}
+  p.res(body);
+};
 function getText(url){
   return new Promise(function(res,rej){
     url=apiUrl(url);
@@ -151,25 +423,29 @@ function getText(url){
       if(error)rej(error);else res(value);
     }
     var timer=setTimeout(function(){
-      finish(new Error('זמן ההמתנה לשרת הכנסת הסתיים. נסו שוב'));
+      finish(makeApiError(0,url,'','זמן ההמתנה לשרת הכנסת הסתיים. נסו שוב'));
       if(controller)controller.abort();
     },NETWORK_TIMEOUT);
     if(window.Android&&window.Android.httpGet){
-      id=++nid;pending[id]={res:function(t){finish(null,t)},rej:function(e){finish(e)}};
-      try{window.Android.httpGet(id,url)}catch(e){finish(new Error('החיבור לשרת הכנסת נכשל'))}
+      id=++nid;pending[id]={url:url,res:function(t){finish(null,t)},rej:function(e){finish(e)}};
+      try{window.Android.httpGet(id,url)}catch(e){finish(makeApiError(0,url,'','החיבור לשרת הכנסת נכשל'))}
       return;
     }
     var options={headers:{Accept:'application/json'}};
     if(typeof AbortController==='function'){controller=new AbortController();options.signal=controller.signal}
     try{
-      fetch(url,options).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.text()})
-        .then(function(t){finish(null,t)},function(e){finish(new Error(/^HTTP /.test(e.message)?e.message:'החיבור לשרת הכנסת נכשל או נחסם'))});
-    }catch(e){finish(new Error('החיבור לשרת הכנסת אינו זמין בדפדפן הזה'))}
+      fetch(url,options).then(function(r){return r.text().then(function(body){
+        if(!r.ok)throw makeApiError(r.status,url,body);
+        return body;
+      })}).then(function(t){finish(null,t)},function(e){
+        finish(e&&e.name==='KnessetApiError'?e:makeApiError(0,url,'','החיבור לשרת הכנסת נכשל או נחסם'));
+      });
+    }catch(e){finish(makeApiError(0,url,'','החיבור לשרת הכנסת אינו זמין בדפדפן הזה'))}
   });
 }
 function getJson(url){return getText(url).then(function(text){
-  var j;try{j=JSON.parse(text)}catch(e){throw new Error('שרת הכנסת לא החזיר JSON תקין. ייתכן שהגישה נחסמה')}
-  if(!j||!Array.isArray(j.value))throw new Error('מבנה הנתונים שהתקבל משרת הכנסת אינו תקין');
+  var j;try{j=JSON.parse(text)}catch(e){throw makeApiError(200,apiUrl(url),text,'שרת הכנסת לא החזיר JSON תקין. ייתכן שהגישה נחסמה')}
+  if(!j||!Array.isArray(j.value))throw makeApiError(200,apiUrl(url),text,'מבנה הנתונים שהתקבל משרת הכנסת אינו תקין');
   return j;
 })}
 function fetchAll(url,max){var out=[],seen={};
@@ -184,6 +460,18 @@ function fetchAll(url,max){var out=[],seen={};
   return Promise.resolve().then(function(){return step(url)});
 }
 function chunks(a,n){var r=[];for(var i=0;i<a.length;i+=n)r.push(a.slice(i,i+n));return r}
+function mapLimit(items,limit,fn){
+  var results=new Array(items.length),next=0,failed=false,workers=[];
+  function worker(){
+    if(failed||next>=items.length)return Promise.resolve();
+    var index=next++;
+    return Promise.resolve().then(function(){return fn(items[index],index)}).then(function(result){
+      results[index]=result;return worker();
+    },function(error){failed=true;throw error});
+  }
+  for(var i=0;i<Math.min(limit,items.length);i++)workers.push(worker());
+  return Promise.all(workers).then(function(){return results});
+}
 
 function apiId(value){
   if(typeof value!=='number'&&(typeof value!=='string'||!/^\d+$/.test(value)))return null;
@@ -209,9 +497,10 @@ function loadMembers(k){
     });
     var ids=Object.keys(members);
     if(!ids.length){toast('לא נמצאו חברי כנסת בכנסת ה-'+k);return}
-    return Promise.all(chunks(ids,30).map(function(c){
+    // Keep filters below OData's default 100-node limit (10 IDs use about 49 nodes).
+    return mapLimit(chunks(ids,API_ID_BATCH_SIZE),API_CONCURRENCY,function(c){
       return fetchAll(BASE+'KNS_Person?$filter='+c.map(function(i){return'Id eq '+i}).join(' or ')+'&$select=Id,FirstName,LastName&$top=100',100)
-    })).then(function(parts){
+    }).then(function(parts){
       var people=[].concat.apply([],parts),seen={},added=0,updated=0;
       people.forEach(function(p){
         if(!p||!apiId(p.Id)||!members[apiId(p.Id)])throw new Error('מזהה לא תקין ברשימת חברי הכנסת');
@@ -232,7 +521,7 @@ function loadMembers(k){
       });
       var saved=save();render();if(saved)toast('נוספו '+added+' חברי כנסת'+(updated?' · הושלמו סיעות ל-'+updated+' רשומות':''));
     });
-  }).catch(function(e){toast('הטעינה מה-API נכשלה ('+e.message+'). אפשר להוסיף ידנית.')});
+  }).catch(function(e){if(S===state)reportApiError('members',e,{k:k})});
 }
 function loadBills(m){
   var personId=m&&apiId(m.apiPersonId),requested={};
@@ -244,9 +533,9 @@ function loadBills(m){
       var id=x&&apiId(x.BillID);if(!id)throw new Error('מזהה לא תקין ברשימת הצעות החוק');requested[id]=true;
     });
     var ids=Object.keys(requested);
-    return Promise.all(chunks(ids,25).map(function(c){
+    return mapLimit(chunks(ids,API_ID_BATCH_SIZE),API_CONCURRENCY,function(c){
       return fetchAll(BASE+'KNS_Bill?$filter='+c.map(function(i){return'Id eq '+i}).join(' or ')+'&$select=Id,KnessetNum,Name,SubTypeDesc&$top=100',100)
-    }));
+    });
   }).then(function(parts){
     var loaded=[],seen={};
     [].concat.apply([],parts).forEach(function(b){
@@ -258,25 +547,27 @@ function loadBills(m){
     if(S.mks.indexOf(m)<0)return;
     bills[m.id]=loaded;render();toast('נטענו '+loaded.length+' הצעות');
   })
-  .catch(function(e){toast('הטעינה נכשלה ('+e.message+')')});
+  .catch(function(e){if(S.mks.indexOf(m)>=0)reportApiError('bills',e,{id:m.id})});
 }
 
 /* ---------- dialogs ---------- */
 var dialogActive=false;
-function ask(title,fields,okLabel){
+function ask(title,fields,okLabel,options){
   if(dialogActive)return Promise.resolve(null);
-  dialogActive=true;
+  dialogActive=true;options=options||{};
   return new Promise(function(resolve){
     var dlg=document.getElementById('dlg'),f=document.getElementById('dlgForm');
     var result=null;
     var h='<h3>'+esc(title)+'</h3>';
+    if(options.intro)h+='<p class="mute">'+esc(options.intro)+'</p>';
+    if(options.content)h+=options.content;
     fields.forEach(function(x){
       var v=x.value==null?'':x.value,req=x.required?' required':'';
-      if(x.type==='checkbox'){h+='<label class="chk"><input type="checkbox" name="'+x.k+'"'+(v?' checked':'')+'> '+esc(x.label)+'</label>';return}
+      if(x.type==='checkbox'){h+='<label class="chk"><input type="checkbox" name="'+x.k+'"'+(v?' checked':'')+req+'> '+esc(x.label)+'</label>';return}
       h+='<label for="f_'+x.k+'">'+esc(x.label)+(x.required?' *':'')+'</label>';
       if(x.type==='select'){h+='<select id="f_'+x.k+'" name="'+x.k+'">'+x.options.map(function(o){return'<option value="'+esc(o[0])+'"'+(o[0]===v?' selected':'')+'>'+esc(o[1])+'</option>'}).join('')+'</select>'}
       else if(x.type==='textarea'){h+='<textarea id="f_'+x.k+'" name="'+x.k+'"'+req+'>'+esc(v)+'</textarea>'}
-      else{h+='<input id="f_'+x.k+'" name="'+x.k+'" type="'+(x.type||'text')+'" value="'+esc(v)+'"'+req+(x.type==='url'?' inputmode="url" placeholder="https://…"':'')+'>'}
+      else{h+='<input id="f_'+x.k+'" name="'+x.k+'" type="'+(x.type||'text')+'" value="'+esc(v)+'"'+req+(x.type==='url'?' inputmode="url" placeholder="https://…"':'')+(x.type==='password'?' autocomplete="off" spellcheck="false"':'')+'>'}
     });
     h+='<div class="row" style="margin-top:14px"><button class="pri" value="ok">'+esc(okLabel||'שמירה')+'</button><button class="sec" value="cancel" formnovalidate>ביטול</button></div>';
     f.innerHTML=h;
@@ -291,11 +582,13 @@ function ask(title,fields,okLabel){
         if(x.required&&!o[x.k]){toast('יש למלא את השדה: '+x.label);f.elements[x.k].focus();return}
         if(x.type==='url'&&o[x.k]&&!okUrl(o[x.k])){toast('הקישור חייב להתחיל ב-http:// או ב-https://');f.elements[x.k].focus();return}
       }
+      if(options.validate){var message=options.validate(o);if(message){toast(message);return}}
       result=o;dlg.close('ok')};
     // A close event can arrive after submit. Resolve only here so a chained
     // prompt cannot receive the previous dialog's close event.
     dlg.onclose=function(){f.onsubmit=null;dlg.onclose=null;dialogActive=false;resolve(result)};
     dlg.returnValue='';
+    if(options.onOpen)options.onOpen(f);
     dlg.showModal();
   });
 }
@@ -306,11 +599,16 @@ function statusOpts(){return Object.keys(STATUS).map(function(k){return[k,STATUS
 function chip(st){var s=STATUS[st]||STATUS.unchecked;return'<span class="chip '+s[1]+'">'+esc(s[0])+'</span>'}
 function counts(m){var c={};m.promises.forEach(function(p){c[p.status]=(c[p.status]||0)+1});
   return Object.keys(STATUS).filter(function(k){return c[k]}).map(function(k){return'<span class="chip '+STATUS[k][1]+'">'+esc(STATUS[k][0])+' · '+c[k]+'</span>'}).join('')}
+function scoreMarkup(subject,member){
+  var result;try{var engine=window.MKPromiseScoring;result=engine&&(member?engine.scoreMember(subject):engine.scorePromise(subject))}catch(e){}
+  if(!result||result.value===null||!Number.isInteger(result.value)||result.value<0||result.value>255)return'<div class="mute">אין עדיין ציון מבוסס ראיות'+(member&&result?' · כיסוי '+esc(result.scored)+'/'+esc(result.total)+' הבטחות':'')+'</div>'+(result&&!member?'<div class="mute">'+esc(result.reason)+'</div>':'');
+  return'<div class="mute"><strong>ציון קיום <span dir="ltr">'+result.value+'/255</span></strong>'+(member?' · כיסוי '+esc(result.scored)+'/'+esc(result.total)+' הבטחות':'')+'</div>';
+}
 
 function render(){
   var app=document.getElementById('app'),back=document.getElementById('backBtn'),title=document.getElementById('title');
-  if(view.name==='mk'&&mk(view.id)){back.hidden=false;title.textContent=mk(view.id).name;app.innerHTML=renderMk(mk(view.id))}
-  else{view={name:'list'};back.hidden=true;title.textContent='מעקב הבטחות';app.innerHTML=renderListShell();renderItems()}
+  if(view.name==='mk'&&mk(view.id)){back.hidden=false;title.textContent=mk(view.id).name;app.innerHTML=renderApiFailure()+renderMk(mk(view.id))}
+  else{view={name:'list'};back.hidden=true;title.textContent='מעקב הבטחות';app.innerHTML=renderApiFailure()+renderListShell();renderItems()}
 }
 function renderListShell(){
   var factions=Array.from(new Set(S.mks.map(function(m){return m.faction}).filter(Boolean))).sort();
@@ -324,7 +622,7 @@ function renderListShell(){
      +'<label class="chk" style="margin:0"><input type="checkbox" id="onlyNew"'+(F.onlyNew?' checked':'')+'> חדשים בכנסת ה-26</label></div></div>';
   }
   h+='<div id="items"></div>';
-  h+='<div class="note">המידע באפליקציה מוזן על ידי המשתמש. לכל הבטחה ולכל ראיה נדרש קישור למקור, ואין ציון מסכם: הסטטוס נקבע לכל הבטחה בנפרד, ואותה תבנית חלה על כל חברי הכנסת.</div>';
+  h+='<div class="note">המידע והסטטוסים מוזנים ונבדקים על ידי המשתמש. לכל הבטחה ולכל ראיה נדרש קישור למקור. ציון הקיום: קוימה 255, קוימה חלקית 128, לא קוימה 0; הממוצע נותן משקל שווה לכל הבטחה עם מקור וראיות מתאימות ומציג את הכיסוי מתוך כלל ההבטחות. הבטחות לא בדוקות, לא מדידות, מוגבלות בהסכם קואליציוני או ללא הביסוס הנדרש אינן נכללות בציון. קריאת פרוטוקול אינה משנה סטטוס: ציטוט נוסף רק לאחר בחירה ואישור, והשפעתו מוגדרת ידנית.</div>';
   return h;
 }
 function renderItems(){
@@ -335,19 +633,21 @@ function renderItems(){
   if(!list.length){el.innerHTML='<p class="mute">לא נמצאו תוצאות.</p>';return}
   el.innerHTML=list.map(function(m){
     return'<div class="card" data-a="open" data-id="'+esc(m.id)+'" style="cursor:pointer"><div class="row"><h3 class="grow">'+esc(m.name)+'</h3>'+(m.isNew?'<span class="chip new">חדש</span>':'')+'</div>'
-     +'<div class="mute">'+esc(m.faction||'ללא סיעה')+' · הכנסת ה-'+esc(m.knesset||'')+' · '+m.promises.length+' הבטחות</div><div>'+counts(m)+'</div></div>'}).join('');
+     +'<div class="mute">'+esc(m.faction||'ללא סיעה')+' · הכנסת ה-'+esc(m.knesset||'')+' · '+m.promises.length+' הבטחות</div><div>'+counts(m)+'</div>'+scoreMarkup(m,true)+'</div>'}).join('');
 }
 function renderMk(m){
   var h='<div class="card"><div class="row"><div class="grow"><div class="mute">'+esc(m.faction||'ללא סיעה')+' · הכנסת ה-'+esc(m.knesset||'')+(m.isNew?' · חדש':'')+'</div><div>'+(counts(m)||'<span class="mute">אין עדיין הבטחות</span>')+'</div></div>'
-   +'<button class="sec" data-a="editMk" data-id="'+esc(m.id)+'">עריכה</button></div></div>';
+   +'<button class="sec" data-a="editMk" data-id="'+esc(m.id)+'">עריכה</button></div>'+scoreMarkup(m,true)+'</div>';
+  h+='<div class="row" style="margin-bottom:12px"><button class="sec" data-a="readProtocol" data-id="'+esc(m.id)+'"'+(protocolSession&&protocolSession.loading?' disabled':'')+'>קריאת פרוטוקול</button><span class="mute">בחירת מקור וציטוט לבדיקה מול הבטחה</span></div>'+protocolReaderMarkup(m);
   h+='<div class="row"><h2 class="grow">הבטחות</h2><button class="pri" data-a="addPromise" data-id="'+esc(m.id)+'">+ הבטחה</button></div>';
   if(!m.promises.length)h+='<p class="mute">הוסיפו הבטחה עם קישור למקור שבו נאמרה (מצע, ראיון, נאום).</p>';
   m.promises.forEach(function(p){
     h+='<div class="card"><div>'+esc(p.text)+'</div><div class="mute">'+(p.topic?esc(p.topic)+' · ':'')+(p.sourceDate?esc(p.sourceDate)+' · ':'')+link(p.sourceUrl)+'</div>'
      +'<label>סטטוס</label><select data-a="status" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">'+statusOpts().map(function(o){return'<option value="'+o[0]+'"'+(o[0]===p.status?' selected':'')+'>'+esc(o[1])+'</option>'}).join('')+'</select>'
+     +scoreMarkup(p,false)
      +(p.note?'<div class="mute" style="margin-top:6px">'+esc(p.note)+'</div>':'');
     (p.evidence||[]).forEach(function(e){
-      h+='<div class="ev '+esc(e.effect)+'"><div>'+esc(e.title)+'</div><div class="mute">'+esc(e.type)+' · '+esc(EFFECT[e.effect]||'')+(e.date?' · '+esc(e.date):'')+' · '+link(e.url)+' <button class="lnk danger" data-a="delEv" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'" data-e="'+esc(e.id)+'">מחיקה</button></div></div>'});
+      h+='<div class="ev '+esc(e.effect)+'"><div>'+esc(e.title)+'</div>'+(e.excerpt?'<blockquote class="protocol-quote">'+esc(e.excerpt)+'</blockquote>':'')+(e.protocol?'<div class="mute">'+esc(e.protocol.committee||'פרוטוקול ועדה')+(e.protocol.date?' · '+esc(e.protocol.date):'')+'</div>':'')+'<div class="mute">'+esc(e.type)+' · '+esc(EFFECT[e.effect]||'')+(e.date?' · '+esc(e.date):'')+' · '+link(e.url)+' <button class="lnk danger" data-a="delEv" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'" data-e="'+esc(e.id)+'">מחיקה</button></div></div>'});
     h+='<div class="row" style="margin-top:8px"><button class="sec" data-a="addEv" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">+ ראיה</button><button class="lnk" data-a="editPromise" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">עריכה</button><button class="lnk danger" data-a="delPromise" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">מחיקה</button></div></div>'});
   h+='<div class="row"><h2 class="grow">פעילות ציבורית קודמת</h2><button class="sec" data-a="addBg" data-id="'+esc(m.id)+'">+ פריט</button></div>';
   h+='<p class="mute">תפקידים, פרסומים והצהרות פומביות שאפשר לקשר למקור. בלי פרטים פרטיים.</p>';
@@ -366,7 +666,14 @@ function renderMk(m){
 /* ---------- actions ---------- */
 var A={
   open:function(d){view={name:'mk',id:d.id};render();window.scrollTo(0,0)},
-  loadMembers:function(){loadMembers(25)},
+  loadMembers:function(){clearApiFailure('members');loadMembers(25)},
+  dismissApi:function(){clearApiFailure()},
+  retryApi:function(){retryApiFailure()},
+  protocolSettings:function(){showProtocolSettings()},
+  readProtocol:function(d){readProtocolForm(mk(d.id))},
+  reviewProtocol:function(){showProtocolResult()},
+  retryProtocol:function(){if(protocolSession&&!protocolSession.loading)startProtocolRead(protocolSession,protocolSession.url)},
+  dismissProtocol:function(){protocolSession=null;render()},
   addMk:function(){mkForm()},
   editMk:function(d){mkForm(mk(d.id))},
   addPromise:function(d){promiseForm(mk(d.id))},
@@ -376,7 +683,7 @@ var A={
   delEv:function(d){var p=mk(d.id).promises.find(function(x){return x.id===d.p});p.evidence=p.evidence.filter(function(e){return e.id!==d.e});save();render()},
   addBg:function(d){var m=mk(d.id);ask('פעילות ציבורית קודמת',[{k:'title',label:'תיאור (תפקיד / פרסום / הצהרה)',required:true},{k:'period',label:'תקופה'},{k:'url',label:'קישור למקור',type:'url',required:true},{k:'note',label:'הערה',type:'textarea'}]).then(function(o){if(!o)return;o.id=uid();m.background.push(o);save();render()})},
   delBg:function(d){var m=mk(d.id);m.background=m.background.filter(function(b){return b.id!==d.b});save();render()},
-  loadBills:function(d){loadBills(mk(d.id))},
+  loadBills:function(d){clearApiFailure('bills',d.id);loadBills(mk(d.id))},
   billToPromise:function(d){
     var m=mk(d.id);if(!m.promises.length){toast('קודם הוסיפו הבטחה');return}
     var b=(bills[m.id]||[]).find(function(x){return String(x.BillID)===d.b});if(!b)return;
@@ -400,7 +707,7 @@ function promiseForm(m,p){
 function evForm(m,pid){
   ask('ראיה לפעילות',[{k:'title',label:'תיאור',required:true},{k:'type',label:'סוג',type:'select',options:EVTYPE.map(function(t){return[t,t]})},{k:'effect',label:'השפעה על ההבטחה',type:'select',options:[['support',EFFECT.support],['contradict',EFFECT.contradict],['context',EFFECT.context]]},{k:'date',label:'תאריך',type:'date'},{k:'url',label:'קישור למקור',type:'url',required:true}]).then(function(o){
     if(!o)return;var p=m.promises.find(function(x){return x.id===pid});o.id=uid();p.evidence=p.evidence||[];p.evidence.push(o);save();render()})}
-function resetView(){view={name:'list'};F={q:'',faction:'',onlyNew:false};bills=Object.create(null)}
+function resetView(){view={name:'list'};F={q:'',faction:'',onlyNew:false};bills=Object.create(null);protocolSession=null}
 function downloadBackup(text){
   var url=URL.createObjectURL(new Blob([text],{type:'application/json'})),a=document.createElement('a');
   a.href=url;a.download='mk-promises.json';document.body.appendChild(a);a.click();a.remove();

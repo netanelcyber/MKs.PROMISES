@@ -1,0 +1,32 @@
+services:
+  selenium:
+    image: selenium/standalone-chromium:4.51.0-20261010
+    shm_size: 2gb
+    environment:
+      SE_NODE_MAX_SESSIONS: "2"
+      SE_NODE_OVERRIDE_MAX_SESSIONS: "true"
+      SE_NODE_SESSION_TIMEOUT: "90"
+      SE_SESSION_REQUEST_TIMEOUT: "30"
+      SE_ENABLE_TRACING: "false"
+    # Grid is reachable only on the Compose network; no host ports are published.
+    healthcheck:
+      test: ["CMD", "/opt/bin/check-grid.sh", "--host", "0.0.0.0", "--port", "4444"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+  reader:
+    build: .
+    environment:
+      SELENIUM_URL: http://selenium:4444
+      PROTOCOL_HOST: 0.0.0.0
+      PROTOCOL_PORT: "8788"
+      PROTOCOL_API_TOKEN: ${PROTOCOL_API_TOKEN:?Set a private PROTOCOL_API_TOKEN before starting}
+      PROTOCOL_ALLOWED_ORIGINS: ${PROTOCOL_ALLOWED_ORIGINS:-}
+    ports:
+      - "127.0.0.1:8788:8788"
+    depends_on:
+      selenium:
+        condition: service_healthy
+    restart: unless-stopped
