@@ -164,12 +164,17 @@ public class MainActivity extends Activity {
         return m == null || m.isEmpty() ? e.getClass().getSimpleName() : m;
     }
 
-    private Callback<String> pickCallback;
+    private Callback<byte[]> pickCallback;
     private static final int PICK_FILE = 4711;
 
     /** Let the user pick a text file (a model, a backup) and deliver its content. */
     void pickFile(Callback<String> onText) {
-        pickCallback = onText;
+        pickBytes(b -> onText.run(new String(b, java.nio.charset.StandardCharsets.UTF_8)));
+    }
+
+    /** Let the user pick any file and deliver its bytes (up to 64 MB). */
+    void pickBytes(Callback<byte[]> onBytes) {
+        pickCallback = onBytes;
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("*/*");
@@ -182,7 +187,7 @@ public class MainActivity extends Activity {
         if (requestCode != PICK_FILE || pickCallback == null) {
             return;
         }
-        final Callback<String> cb = pickCallback;
+        final Callback<byte[]> cb = pickCallback;
         pickCallback = null;
         if (resultCode != RESULT_OK || data == null || data.getData() == null) {
             return;
@@ -203,7 +208,7 @@ public class MainActivity extends Activity {
                         throw new java.io.IOException("הקובץ גדול מדי");
                     }
                 }
-                return new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+                return out.toByteArray();
             } finally {
                 in.close();
             }

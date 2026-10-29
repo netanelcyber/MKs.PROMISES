@@ -31,6 +31,7 @@ final class Http {
     static final HostRule PUBLIC = Http::isPublicHost;
 
     private static final int MAX_BYTES = 3 * 1024 * 1024;
+    private static final int MAX_FILE_BYTES = 25 * 1024 * 1024;
 
     private Http() {
     }
@@ -57,6 +58,15 @@ final class Http {
 
     /** GET a URL and return the body. Throws HttpException for HTTP errors (the body is kept for diagnostics). */
     static String get(String url, String accept, HostRule rule) throws IOException {
+        return new String(fetch(url, accept, rule, MAX_BYTES), StandardCharsets.UTF_8);
+    }
+
+    /** GET a file (up to 25 MB), for example a protocol .docx. */
+    static byte[] getBytes(String url, HostRule rule) throws IOException {
+        return fetch(url, "*/*", rule, MAX_FILE_BYTES);
+    }
+
+    private static byte[] fetch(String url, String accept, HostRule rule, int limit) throws IOException {
         String current = url;
         for (int hop = 0; hop < 4; hop++) {
             URL u = new URL(current);
@@ -79,9 +89,9 @@ final class Http {
                     continue;
                 }
                 InputStream in = status >= 400 ? c.getErrorStream() : c.getInputStream();
-                String body = read(in);
+                byte[] body = read(in, limit);
                 if (status < 200 || status >= 300) {
-                    throw new HttpException(status, body);
+                    throw new HttpException(status, new String(body, StandardCharsets.UTF_8));
                 }
                 return body;
             } finally {
@@ -91,18 +101,18 @@ final class Http {
         throw new IOException("יותר מדי הפניות");
     }
 
-    private static String read(InputStream in) throws IOException {
+    private static byte[] read(InputStream in, int limit) throws IOException {
         if (in == null) {
-            return "";
+            return new byte[0];
         }
         try {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buf = new byte[8192];
             int n;
-            while ((n = in.read(buf)) > 0 && out.size() < MAX_BYTES) {
+            while ((n = in.read(buf)) > 0 && out.size() < limit) {
                 out.write(buf, 0, n);
             }
-            return new String(out.toByteArray(), StandardCharsets.UTF_8);
+            return out.toByteArray();
         } finally {
             in.close();
         }

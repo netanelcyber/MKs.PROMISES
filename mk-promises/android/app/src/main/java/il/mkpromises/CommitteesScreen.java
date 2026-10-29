@@ -17,8 +17,8 @@ import java.util.Set;
 final class CommitteesScreen implements Screen {
 
     private static final String FILE = "committees.json";
-    private static final String DEFAULT_FROM = "2026-04-27";
-    private static final String DEFAULT_TO = "2026-10-27";
+    static final String DEFAULT_FROM = "2026-04-27";
+    static final String DEFAULT_TO = "2026-10-27";
 
     private JSONObject data;
     private boolean loading;
@@ -161,35 +161,38 @@ final class CommitteesScreen implements Screen {
         });
     }
 
+    /** Committees, sessions in the window, and committee roles of the 25th Knesset. Blocking. */
+    static JSONObject fetchData(String from, String to) throws java.io.IOException {
+        JSONArray committees = new JSONArray();
+        for (JSONObject c : Odata.fetchAll("KNS_Committee", "KnessetNum eq 25", "Id,Name,CommitteeTypeDesc", 1000)) {
+            committees.put(J.obj("id", Odata.id(c.opt("Id")), "n", c.optString("Name"), "t", c.optString("CommitteeTypeDesc", "")));
+        }
+        JSONArray sessions = new JSONArray();
+        for (JSONObject s : Odata.fetchAll("KNS_CommitteeSession",
+                "KnessetNum eq 25 and StartDate ge " + from + "T00:00:00Z and StartDate le " + to + "T23:59:59Z",
+                "Id,CommitteeID,StartDate,TypeDesc,SessionUrl", 20000)) {
+            String url = s.optString("SessionUrl", "");
+            sessions.put(J.obj("i", Odata.id(s.opt("Id")), "c", Odata.id(s.opt("CommitteeID")),
+                    "d", s.optString("StartDate", "").length() >= 10 ? s.optString("StartDate").substring(0, 10) : "",
+                    "t", s.optString("TypeDesc", ""), "u", Scoring.validUrl(url) ? url : ""));
+        }
+        JSONArray roles = new JSONArray();
+        for (JSONObject x : Odata.fetchAll("KNS_PersonToPosition", "KnessetNum eq 25 and CommitteeID ne null",
+                "PersonID,CommitteeID,DutyDesc,StartDate,FinishDate", 20000)) {
+            roles.put(J.obj("p", Odata.id(x.opt("PersonID")), "c", Odata.id(x.opt("CommitteeID")), "d", x.optString("DutyDesc", ""),
+                    "s", x.optString("StartDate", "").length() >= 10 ? x.optString("StartDate").substring(0, 10) : "",
+                    "f", x.optString("FinishDate", "").length() >= 10 ? x.optString("FinishDate").substring(0, 10) : ""));
+        }
+        return J.obj("from", from, "to", to, "committees", committees, "sessions", sessions, "roles", roles);
+    }
+
     private void load(MainActivity app, String from, String to) {
         if (loading) {
             return;
         }
         loading = true;
         app.refresh();
-        app.background(() -> {
-            JSONArray committees = new JSONArray();
-            for (JSONObject c : Odata.fetchAll("KNS_Committee", "KnessetNum eq 25", "Id,Name,CommitteeTypeDesc", 1000)) {
-                committees.put(J.obj("id", Odata.id(c.opt("Id")), "n", c.optString("Name"), "t", c.optString("CommitteeTypeDesc", "")));
-            }
-            JSONArray sessions = new JSONArray();
-            for (JSONObject s : Odata.fetchAll("KNS_CommitteeSession",
-                    "KnessetNum eq 25 and StartDate ge " + from + "T00:00:00Z and StartDate le " + to + "T23:59:59Z",
-                    "Id,CommitteeID,StartDate,TypeDesc,SessionUrl", 20000)) {
-                String url = s.optString("SessionUrl", "");
-                sessions.put(J.obj("i", Odata.id(s.opt("Id")), "c", Odata.id(s.opt("CommitteeID")),
-                        "d", s.optString("StartDate", "").length() >= 10 ? s.optString("StartDate").substring(0, 10) : "",
-                        "t", s.optString("TypeDesc", ""), "u", Scoring.validUrl(url) ? url : ""));
-            }
-            JSONArray roles = new JSONArray();
-            for (JSONObject x : Odata.fetchAll("KNS_PersonToPosition", "KnessetNum eq 25 and CommitteeID ne null",
-                    "PersonID,CommitteeID,DutyDesc,StartDate,FinishDate", 20000)) {
-                roles.put(J.obj("p", Odata.id(x.opt("PersonID")), "c", Odata.id(x.opt("CommitteeID")), "d", x.optString("DutyDesc", ""),
-                        "s", x.optString("StartDate", "").length() >= 10 ? x.optString("StartDate").substring(0, 10) : "",
-                        "f", x.optString("FinishDate", "").length() >= 10 ? x.optString("FinishDate").substring(0, 10) : ""));
-            }
-            return J.obj("from", from, "to", to, "committees", committees, "sessions", sessions, "roles", roles);
-        }, result -> {
+        app.background(() -> fetchData(from, to), result -> {
             loading = false;
             data = result;
             Cache.write(app, FILE, result);
