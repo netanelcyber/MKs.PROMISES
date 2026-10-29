@@ -58,6 +58,7 @@ button:disabled{opacity:.55;cursor:wait}
   <button id="backBtn" hidden aria-label="חזרה">→ חזרה</button>
   <h1 id="title">מעקב הבטחות</h1>
   <button data-a="protocolSettings">פרוטוקולים</button>
+  <button data-a="openZehut">זהות</button>
   <button data-a="geminiSettings">Gemini</button>
   <button data-a="menu">⋮ גיבוי</button>
 </header>
@@ -751,6 +752,7 @@ var VKEY='mk-promises-votes-v1',VT_MAX_SKIP=300000,VT_DELAY=120;
 var GEMINI_KEY_STORE='mk-promises-gemini-key-v1',GEMINI_TAGS_STORE='mk-promises-gemini-tags-v1';
 var GEMINI_TOPICS=['ביטחון','כלכלה','חינוך','בריאות','חברה ורווחה','משפט','סביבה','תחבורה','דת ומדינה','תקשורת וטכנולוגיה','שלטון מקומי','עבודה','דיור','חקלאות','אחר'];
 var geminiRunning=false,geminiProgress='',geminiTags=null;
+var ZEHUT_STORE='mk-promises-zehut-v1',zehutRunning=false,zehutContent=null;
 var VT=null,vtReady=false,vtRun=false,vtStop=false,VQ='';
 function isNativeBills(){return!!(window.Android&&window.Android.startBills)}
 function blRead(){
@@ -1368,7 +1370,8 @@ function wipeCaches(){
   try{if(window.Android&&window.Android.wipeInitiators)window.Android.wipeInitiators()}catch(e){}
   try{if(window.Android&&window.Android.wipeLaws)window.Android.wipeLaws()}catch(e){}
   try{if(window.Android&&window.Android.wipeVotes)window.Android.wipeVotes()}catch(e){}
-  BL=null;blReady=true;blRun=false;BQ='';BQ_TOPIC='';INI=null;iniReady=true;iniRun=false;LW=null;lwReady=true;lwRun=false;LQ='';VT=null;vtReady=true;vtRun=false;VQ='';CM=null;cmReady=true;geminiTags=null;
+  try{localStorage.removeItem(ZEHUT_STORE)}catch(e){}
+  BL=null;blReady=true;blRun=false;BQ='';BQ_TOPIC='';INI=null;iniReady=true;iniRun=false;LW=null;lwReady=true;lwRun=false;LQ='';VT=null;vtReady=true;vtRun=false;VQ='';CM=null;cmReady=true;geminiTags=null;zehutContent=null;
 }
 function assignEvidence(options,title,type,url){
   var promiseOptions=options.map(function(x){return[x.key,x.label]});
@@ -1381,6 +1384,129 @@ function assignEvidence(options,title,type,url){
     var p=target.promise;p.evidence=p.evidence||[];
     p.evidence.push({id:uid(),title:title,type:type,effect:o.effect,date:'',url:url});
     var saved=save();render();if(saved)toast('נוסף');
+  });
+}
+
+/* ---------- זהות content generator ---------- */
+var ZEHUT_DOMAIN='https://xn--4dbcyzi.online';
+function loadZehutCache(){
+  try{var raw=localStorage.getItem(ZEHUT_STORE);return raw?JSON.parse(raw):{}}catch(e){return{}}
+}
+function saveZehutCache(cache){
+  try{localStorage.setItem(ZEHUT_STORE,JSON.stringify(cache))}catch(e){}
+}
+function zehutPrompt(m){
+  var promises=m.promises.map(function(p,i){
+    var st=STATUS[p.status]?STATUS[p.status][0]:'לא בדוק';
+    return(i+1)+'. '+p.text+' ('+st+')'+(p.topic?' ['+p.topic+']':'')
+  }).join('\n');
+  var score='';
+  try{var engine=window.MKPromiseScoring,r=engine&&engine.scoreMember(m);if(r&&r.value!==null)score='ציון קיום הבטחות: '+r.value+'/255 ('+r.scored+'/'+r.total+' הבטחות נבדקו)'}catch(e){}
+  return 'אתה מחולל תוכן עבור אתר זהות.online — פלטפורמה ישראלית לשקיפות פוליטית.\n'
+    +'צור פרופיל זהות פוליטית בעברית עבור חבר/ת הכנסת הבא/ה.\n\n'
+    +'שם: '+m.name+'\n'
+    +'סיעה: '+(m.faction||'לא ידוע')+'\n'
+    +'כנסת: '+(m.knesset||'לא ידוע')+'\n'
+    +(m.isNew?'חבר/ת כנסת חדש/ה\n':'')
+    +(score?score+'\n':'')
+    +'\nהבטחות:\n'+(promises||'אין הבטחות רשומות')+'\n\n'
+    +'כתוב פרופיל זהות פוליטית מובנה בעברית הכולל:\n'
+    +'1. **כותרת** — שם וסיעה\n'
+    +'2. **סיכום** — 2-3 משפטים על הזהות הפוליטית\n'
+    +'3. **עמדות מרכזיות** — נושאים עיקריים לפי ההבטחות\n'
+    +'4. **מדד אמינות** — ניתוח קצר של ציון קיום ההבטחות\n'
+    +'5. **שורה תחתונה** — משפט מסכם לבוחר\n\n'
+    +'החזר את התוכן בפורמט Markdown בעברית. היה עניייני, מדויק, ונייטרלי. אל תמציא מידע שלא מופיע למעלה.';
+}
+function generateZehutProfile(m){
+  var key=geminiKey();
+  if(!key){showGeminiSettings().then(function(saved){if(saved&&geminiKey())generateZehutProfile(m)});return}
+  zehutRunning=true;zehutContent=null;render();
+  var body={contents:[{parts:[{text:zehutPrompt(m)}]}],generationConfig:{temperature:0.3}};
+  geminiPost(key,body).then(function(resp){
+    var text='';
+    try{text=resp.candidates[0].content.parts[0].text}catch(e){throw new Error('תשובת Gemini לא תקינה')}
+    zehutContent={mkId:m.id,mkName:m.name,text:text,date:new Date().toISOString().slice(0,16).replace('T',' ')};
+    var cache=loadZehutCache();cache[m.id]=zehutContent;saveZehutCache(cache);
+    zehutRunning=false;render();
+  }).catch(function(e){
+    zehutRunning=false;render();
+    toast('יצירת פרופיל נכשלה: '+String(e.message||e).slice(0,200));
+  });
+}
+function mdToHtml(md){
+  return esc(md)
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,'<em>$1</em>')
+    .replace(/^### (.+)$/gm,'<h4>$1</h4>')
+    .replace(/^## (.+)$/gm,'<h3>$1</h3>')
+    .replace(/^# (.+)$/gm,'<h2>$1</h2>')
+    .replace(/\n/g,'<br>');
+}
+function renderZehut(){
+  var h='<div class="card">'
+    +'<div class="mute">מחולל תכנים של <a href="'+ZEHUT_DOMAIN+'" target="_blank" rel="noopener">זהות.online</a> — פרופיל זהות פוליטית לכל חבר/ת כנסת באמצעות Gemini AI.</div>'
+    +'</div>';
+  if(!S.mks.length)return h+'<div class="card"><p class="mute">אין חברי כנסת. הוסיפו חברי כנסת במסך הראשי.</p></div>';
+  h+='<div class="card"><h3>בחירת חבר/ת כנסת</h3>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">';
+  S.mks.slice().sort(function(a,b){return(a.name||'').localeCompare(b.name||'','he')}).forEach(function(m){
+    var cache=loadZehutCache(),has=!!cache[m.id];
+    h+='<button class="chip'+(has?' ok':'')+'" data-a="genZehut" data-id="'+esc(m.id)+'">'+esc(m.name)+'</button>';
+  });
+  h+='</div></div>';
+  if(zehutRunning){
+    h+='<div class="card"><div class="mute">יוצר פרופיל זהות פוליטית… נא להמתין</div></div>';
+  }
+  if(zehutContent){
+    h+='<div class="card">'
+      +'<div class="row"><h3 class="grow">'+esc(zehutContent.mkName)+'</h3>'
+      +'<button class="sec" data-a="shareZehut">שיתוף</button>'
+      +'<button class="sec" data-a="copyZehut">העתקה</button></div>'
+      +'<div class="mute">נוצר: '+esc(zehutContent.date)+' · <a href="'+ZEHUT_DOMAIN+'" target="_blank" rel="noopener">זהות.online</a></div>'
+      +'<div style="margin-top:12px;line-height:1.7">'+mdToHtml(zehutContent.text)+'</div>'
+      +'</div>';
+  } else {
+    var cache=loadZehutCache(),ids=Object.keys(cache);
+    if(ids.length){
+      h+='<h2>פרופילים שנוצרו</h2>';
+      ids.forEach(function(id){
+        var c=cache[id];
+        h+='<div class="card" style="cursor:pointer" data-a="showZehut" data-id="'+esc(id)+'">'
+          +'<h3>'+esc(c.mkName)+'</h3>'
+          +'<div class="mute">'+esc(c.date)+' · <a href="'+ZEHUT_DOMAIN+'" target="_blank" rel="noopener">זהות.online</a></div>'
+          +'</div>';
+      });
+    }
+  }
+  h+='<div class="card"><button class="pri" data-a="genZehutAll"'+(zehutRunning?' disabled':'')+'>יצירת פרופילים לכל חברי הכנסת</button>'
+    +'<div class="mute" style="margin-top:6px">ייצור פרופיל זהות לכל חבר כנסת שעדיין אין לו פרופיל שמור.</div></div>';
+  return h;
+}
+function generateZehutAll(){
+  var key=geminiKey();
+  if(!key){showGeminiSettings().then(function(saved){if(saved&&geminiKey())generateZehutAll()});return}
+  var cache=loadZehutCache();
+  var remaining=S.mks.filter(function(m){return!cache[m.id]});
+  if(!remaining.length){toast('לכל חברי הכנסת כבר יש פרופיל');return}
+  zehutRunning=true;render();
+  var i=0;
+  function next(){
+    if(i>=remaining.length){zehutRunning=false;render();toast('נוצרו '+remaining.length+' פרופילים');return Promise.resolve()}
+    var m=remaining[i++];
+    zehutContent=null;
+    var body={contents:[{parts:[{text:zehutPrompt(m)}]}],generationConfig:{temperature:0.3}};
+    return geminiPost(key,body).then(function(resp){
+      var text='';
+      try{text=resp.candidates[0].content.parts[0].text}catch(e){text='שגיאה בתשובת Gemini'}
+      var entry={mkId:m.id,mkName:m.name,text:text,date:new Date().toISOString().slice(0,16).replace('T',' ')};
+      var c=loadZehutCache();c[m.id]=entry;saveZehutCache(c);
+      zehutContent=entry;render();
+    }).then(function(){return new Promise(function(r){setTimeout(r,600)})}).then(next);
+  }
+  next().catch(function(e){
+    zehutRunning=false;render();
+    toast('יצירת פרופילים נכשלה: '+String(e.message||e).slice(0,200));
   });
 }
 
@@ -1402,6 +1528,7 @@ function render(){
   else if(view.name==='bills'){back.hidden=false;title.textContent='כל הצעות החוק';app.innerHTML=renderApiFailure()+renderBills()+renderInitiators();renderBillItems();blProgress();iniProgress()}
   else if(view.name==='laws'){back.hidden=false;title.textContent='חוקי ישראל';app.innerHTML=renderApiFailure()+renderLaws();renderLawItems();lwProgress()}
   else if(view.name==='votes'){back.hidden=false;title.textContent='הצבעות במליאה';app.innerHTML=renderApiFailure()+renderVotes();renderVoteItems();vtProgress()}
+  else if(view.name==='zehut'){back.hidden=false;title.textContent='זהות — מחולל תכנים';app.innerHTML=renderApiFailure()+renderZehut()}
   else{view={name:'list'};back.hidden=true;title.textContent='מעקב הבטחות';app.innerHTML=renderApiFailure()+renderListShell();renderItems()}
 }
 function renderListShell(){
@@ -1525,6 +1652,22 @@ var A={
     geminiTagBills(key);
   },
   geminiSettings:function(){showGeminiSettings()},
+  openZehut:function(){view={name:'zehut'};zehutContent=null;render();window.scrollTo(0,0)},
+  genZehut:function(d){var m=mk(d.id);if(!m)return;generateZehutProfile(m)},
+  genZehutAll:function(){generateZehutAll()},
+  showZehut:function(d){var cache=loadZehutCache(),c=cache[d.id];if(c)zehutContent=c;render()},
+  shareZehut:function(){
+    if(!zehutContent)return;
+    var text='פרופיל זהות פוליטית: '+zehutContent.mkName+'\n'+ZEHUT_DOMAIN+'\n\n'+zehutContent.text;
+    if(window.Android&&window.Android.shareText)window.Android.shareText(text);
+    else if(navigator.share)navigator.share({title:'זהות — '+zehutContent.mkName,text:text}).catch(function(){});
+    else{try{navigator.clipboard.writeText(text);toast('הועתק ללוח')}catch(e){toast('לא ניתן לשתף')}}
+  },
+  copyZehut:function(){
+    if(!zehutContent)return;
+    var text='פרופיל זהות פוליטית: '+zehutContent.mkName+'\n'+ZEHUT_DOMAIN+'\n\n'+zehutContent.text;
+    try{navigator.clipboard.writeText(text);toast('הועתק ללוח')}catch(e){toast('לא ניתן להעתיק')}
+  },
   filterTopic:function(d){BQ_TOPIC=d.b||'';renderBillItems()},
   openCmts:function(){view={name:'cmts'};render();window.scrollTo(0,0)},
   openCmt:function(d){var id=apiId(d.id);if(!id)return;view={name:'cmt',id:id};render();window.scrollTo(0,0)},
