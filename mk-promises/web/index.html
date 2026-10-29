@@ -65,6 +65,7 @@ button:disabled{opacity:.55;cursor:wait}
 <dialog id="dlg"><form method="dialog" id="dlgForm"></form></dialog>
 
 <script src="promise-scoring.js"></script>
+<script src="stance-model.js"></script>
 <script>
 (function(){
 'use strict';
@@ -936,7 +937,7 @@ function suggestStance(model,items,member){
       var label=model.labels[k];
       if(label!=='context'&&pr[k]>=0.6&&(!best||pr[k]>best.c))best={c:pr[k],label:label,promise:p.text};
     });
-    if(best)it.hint='הצעת מודל: '+STANCE_LABEL[best.label]+' '+Math.round(best.c*100)+'% · '+best.promise.slice(0,30);
+    if(best)it.hint=(model.synthetic?'הצעת דמו (מודל סינתטי, לא אמין): ':'הצעת מודל: ')+STANCE_LABEL[best.label]+' '+Math.round(best.c*100)+'% · '+best.promise.slice(0,30);
   });
 }
 function mrChoose(member,items){
@@ -1108,7 +1109,11 @@ function stanceReady(){
     if(!text)return null;
     try{STANCE=stanceLoad(JSON.parse(text))}catch(e){return null}
     return STANCE;
-  },function(){return null});
+  },function(){return null}).then(function(m){
+    if(m||!window.__STANCE_BUNDLED)return m;
+    try{STANCE=stanceLoad(window.__STANCE_BUNDLED)}catch(e){return null}   // the model bundled with the app
+    return STANCE;
+  });
 }
 function stanceFromText(text){
   var model=stanceLoad(JSON.parse(text));STANCE=model;

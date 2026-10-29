@@ -1,6 +1,6 @@
 const CACHE_PREFIX = 'mk-promises-';
 const CACHE = CACHE_PREFIX + 'v3-protocols';
-const FILES = ['./', './index.html', './promise-scoring.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
+const FILES = ['./', './index.html', './promise-scoring.js', './stance-model.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
