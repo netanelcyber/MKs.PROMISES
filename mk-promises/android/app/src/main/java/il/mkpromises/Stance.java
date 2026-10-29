@@ -95,8 +95,31 @@ final class Stance {
             } catch (Exception e) {
                 current = null;
             }
+            if (current == null) {
+                current = bundled(app);
+            }
         }
         return current;
+    }
+
+    /** The model packaged in the APK (assets/stance-model.json), or null. A model the user trained or loaded takes priority. */
+    private static Model bundled(MainActivity app) {
+        try {
+            java.io.InputStream in = app.getAssets().open("stance-model.json");
+            try {
+                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    out.write(buf, 0, n);
+                }
+                return fromJson(new String(out.toByteArray(), StandardCharsets.UTF_8));
+            } finally {
+                in.close();
+            }
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     static synchronized void set(MainActivity app, Model m) throws Exception {
@@ -113,7 +136,7 @@ final class Stance {
     static synchronized void clear(MainActivity app) {
         file(app).delete();
         current = null;
-        loaded = true;
+        loaded = false;   // falls back to the bundled model on the next use
     }
 
     static Model fromJson(String text) throws Exception {
