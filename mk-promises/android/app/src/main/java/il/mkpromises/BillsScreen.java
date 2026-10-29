@@ -86,6 +86,30 @@ final class BillsScreen implements Screen {
         }
     }
 
+    interface Count {
+        void on(int n);
+    }
+
+    /** Every private bill of one Knesset, 100 per request. */
+    static JSONArray fetchAll(int k, Count progress) throws Exception {
+        JSONArray out = new JSONArray();
+        for (int skip = 0; skip < 300000; skip += 100) {
+            String url = Odata.url("KNS_Bill", "KnessetNum eq " + k, "Id,KnessetNum,Name,SubTypeDesc") + "&$skip=" + skip + "&$top=100";
+            JSONArray page = Odata.page(url);
+            for (int i = 0; i < page.length(); i++) {
+                JSONObject b = page.optJSONObject(i);
+                if (b != null && Odata.id(b.opt("Id")) > 0) {
+                    out.put(J.obj("i", Odata.id(b.opt("Id")), "n", b.optString("Name"), "s", b.optString("SubTypeDesc")));
+                }
+            }
+            progress.on(out.length());
+            if (page.length() < 100) {
+                break;
+            }
+        }
+        return out;
+    }
+
     private void askKnesset(MainActivity app) {
         if (loading) {
             Ui.toast(app, "הטעינה כבר מתבצעת");
@@ -105,24 +129,9 @@ final class BillsScreen implements Screen {
             progress = "טוען…";
             app.refresh();
             app.background(() -> {
-                JSONArray out = new JSONArray();
-                for (int skip = 0; skip < 300000; skip += 100) {
-                    String url = Odata.url("KNS_Bill", "KnessetNum eq " + k, "Id,KnessetNum,Name,SubTypeDesc") + "&$skip=" + skip + "&$top=100";
-                    JSONArray page = Odata.page(url);
-                    for (int i = 0; i < page.length(); i++) {
-                        JSONObject b = page.optJSONObject(i);
-                        if (b != null && Odata.id(b.opt("Id")) > 0) {
-                            out.put(J.obj("i", Odata.id(b.opt("Id")), "n", b.optString("Name"), "s", b.optString("SubTypeDesc")));
-                        }
-                    }
-                    final int count = out.length();
-                    app.runOnUiThread(() -> {
-                        progress = "נטענו " + count + " הצעות…";
-                    });
-                    if (page.length() < 100) {
-                        break;
-                    }
-                }
+                JSONArray out = fetchAll(k, count -> app.runOnUiThread(() -> {
+                    progress = "נטענו " + count + " הצעות…";
+                }));
                 return out;
             }, out -> {
                 loading = false;

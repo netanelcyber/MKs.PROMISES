@@ -23,11 +23,14 @@ final class ModelScreen {
                     + Math.round(mt.optDouble("macroF1") * 100) + "% על " + mt.optInt("valSize") + " דוגמאות");
         }
         List<Ui.Field> f = new ArrayList<>();
-        f.add(new Ui.Field("act", "פעולה", Ui.SELECT).option("train", "אימון מודל על המכשיר מהתיוגים שלי")
+        f.add(new Ui.Field("act", "פעולה", Ui.SELECT).option("auto", "אימון אוטומטי על כל הצעות החוק (תיוג חלש)").option("train", "אימון מודל על המכשיר מהתיוגים שלי")
                 .option("b2", "מודל מובנה: 2 שכבות LSTM").option("b4", "מודל מובנה: 4 שכבות LSTM")
                 .option("b8", "מודל מובנה: 8 שכבות LSTM").option("load", "טעינת קובץ מודל").option("clear", "הסרת המודל שלי (חוזר למובנה)"));
         Ui.form(app, "מודל הצעות", status + "\nההצעות אינן משנות סטטוס ואינן נבחרות אוטומטית.", f, "המשך", v -> {
             switch (v.get("act")) {
+                case "auto":
+                    AutoTrain.run(app);
+                    break;
                 case "train":
                     train(app);
                     break;
