@@ -400,7 +400,7 @@ public class MainActivity extends Activity {
                     if (bytes.length > 131072) {
                         throw new IOException("request too large");
                     }
-                    String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + apiKey;
+                    String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=" + apiKey;
                     connection = (HttpURLConnection) new URL(url).openConnection();
                     connection.setRequestMethod("POST");
                     connection.setInstanceFollowRedirects(false);

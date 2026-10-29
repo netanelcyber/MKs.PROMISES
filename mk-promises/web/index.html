@@ -1266,7 +1266,7 @@ function geminiPost(apiKey,body){
       try{window.Android.httpGemini(id,apiKey,JSON.stringify(body))}catch(e){delete geminiNativePending[id];reject(e)}
     });
   }
-  var url='https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+encodeURIComponent(apiKey);
+  var url='https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key='+encodeURIComponent(apiKey);
   return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){
     return r.text().then(function(t){
       if(!r.ok)throw new Error('Gemini HTTP '+r.status+': '+t.slice(0,300));
