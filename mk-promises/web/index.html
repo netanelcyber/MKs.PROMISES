@@ -748,9 +748,9 @@ var INI=null,iniReady=false,iniRun=false,iniStop=false;
 var LKEY='mk-promises-laws-v1',LW_MAX_SKIP=300000,LW_DELAY=120;
 var LW=null,lwReady=false,lwRun=false,lwStop=false,LQ='';
 var VKEY='mk-promises-votes-v1',VT_MAX_SKIP=300000,VT_DELAY=120;
-var GEMINI_KEY_STORE='mk-promises-gemini-key-v1';
+var GEMINI_KEY_STORE='mk-promises-gemini-key-v1',GEMINI_TAGS_STORE='mk-promises-gemini-tags-v1';
 var GEMINI_TOPICS=['ביטחון','כלכלה','חינוך','בריאות','חברה ורווחה','משפט','סביבה','תחבורה','דת ומדינה','תקשורת וטכנולוגיה','שלטון מקומי','עבודה','דיור','חקלאות','אחר'];
-var geminiRunning=false,geminiProgress='';
+var geminiRunning=false,geminiProgress='',geminiTags=null;
 var VT=null,vtReady=false,vtRun=false,vtStop=false,VQ='';
 function isNativeBills(){return!!(window.Android&&window.Android.startBills)}
 function blRead(){
@@ -861,7 +861,7 @@ function renderBills(){
    +(blRun?'<button class="pri" data-a="stopBills">עצירה</button>':'<button class="pri" data-a="loadAllBills">'+(b&&!b.done?'המשך טעינה':'טעינת כל הצעות החוק')+'</button>'+(b?'<button class="sec" data-a="freshBills">טעינה מחדש / כנסת אחרת</button>':''))
    +'</div><div class="mute" style="margin-top:8px">הטעינה רצה במכשיר ומביאה 100 הצעות בכל בקשה: <span dir="ltr">$skip</span> עולה ב-100 עד שמתקבל עמוד ריק. ההצעות נשמרות במכשיר ולא נכללות בגיבוי.</div></div>';
   if(b&&b.rows.length){
-    var tagged=b.rows.filter(function(r){return!!r.g}).length;
+    var gtags=loadGeminiTags();var tagged=b.rows.filter(function(r){return!!gtags[r.i]}).length;
     h+='<div class="card"><h3>תיוג אוטומטי (Gemini)</h3><div class="mute">'+tagged+'/'+b.rows.length+' הצעות מתויגות</div>'
      +'<div id="gemProg" class="mute">'+(geminiProgress?esc(geminiProgress):'')+'</div>'
      +'<div class="row" style="margin-top:8px">'
@@ -881,14 +881,16 @@ function renderBillItems(){
   var d=ini(),hasIni=d&&d.rows.length>0;
   var q=BQ.trim().toLowerCase(),list=b.rows;
   if(q)list=list.filter(function(x){return x.n.toLowerCase().indexOf(q)>=0});
-  if(BQ_TOPIC)list=list.filter(function(x){return x.g===BQ_TOPIC});
+  var gtags=loadGeminiTags();
+  if(BQ_TOPIC)list=list.filter(function(x){return gtags[x.i]===BQ_TOPIC});
   el.innerHTML='<p class="mute">'+list.length+' תוצאות'+(list.length>50?' · מוצגות 50 הראשונות':'')+'</p>'+list.slice(0,50).map(function(x){
     var inis='';
     if(hasIni){
       var names=initiatorsForBill(x.i).map(function(r){return mkNameByPersonId(r.p)}).filter(Boolean);
       if(names.length)inis=' · יוזמים: '+names.map(esc).join(', ');
     }
-    return'<div class="card"><div>'+esc(x.n)+'</div><div class="mute">הכנסת ה-'+esc(x.k)+(x.t?' · '+esc(x.t):'')+inis+(x.g?' · <span class="chip">'+esc(x.g)+'</span>':'')+'</div><button class="lnk" data-a="billAssign" data-b="'+esc(x.i)+'">שיוך להבטחה</button></div>';
+    var gt=gtags[x.i]||'';
+    return'<div class="card"><div>'+esc(x.n)+'</div><div class="mute">הכנסת ה-'+esc(x.k)+(x.t?' · '+esc(x.t):'')+inis+(gt?' · <span class="chip">'+esc(gt)+'</span>':'')+'</div><button class="lnk" data-a="billAssign" data-b="'+esc(x.i)+'">שיוך להבטחה</button></div>';
   }).join('');
 }
 /* ---------- initiators (bill→MK mapping) ---------- */
@@ -1239,6 +1241,10 @@ function renderVoteItems(){
 /* ---------- Gemini auto-tag ---------- */
 function geminiKey(){try{return localStorage.getItem(GEMINI_KEY_STORE)||''}catch(e){return''}}
 function geminiSaveKey(k){try{localStorage.setItem(GEMINI_KEY_STORE,k)}catch(e){}}
+function loadGeminiTags(){if(geminiTags)return geminiTags;try{geminiTags=JSON.parse(localStorage.getItem(GEMINI_TAGS_STORE)||'{}');if(!geminiTags||typeof geminiTags!=='object'||Array.isArray(geminiTags))geminiTags={}}catch(e){geminiTags={}}return geminiTags}
+function saveGeminiTags(){try{localStorage.setItem(GEMINI_TAGS_STORE,JSON.stringify(loadGeminiTags()))}catch(e){}}
+function billTag(billId){var t=loadGeminiTags();return t[billId]||''}
+function setBillTag(billId,topic){loadGeminiTags()[billId]=topic}
 function isNativeGemini(){return!!(window.Android&&window.Android.httpGemini)}
 var geminiNativePending=Object.create(null),geminiNativeId=0;
 function geminiPost(apiKey,body){
@@ -1286,7 +1292,8 @@ function parseGeminiTags(response,count){
 }
 function geminiTagBills(apiKey){
   var b=bl();if(!b||!b.rows.length){toast('אין הצעות חוק לתיוג');return Promise.resolve()}
-  var untagged=b.rows.filter(function(r){return!r.g});
+  var tags=loadGeminiTags();
+  var untagged=b.rows.filter(function(r){return!tags[r.i]});
   if(!untagged.length){toast('כל ההצעות כבר מתויגות');return Promise.resolve()}
   var batch=untagged.slice(0,100);
   geminiRunning=true;geminiProgress='מתחיל תיוג '+batch.length+' הצעות...';render();
@@ -1297,11 +1304,11 @@ function geminiTagBills(apiKey){
     var names=chunk.map(function(r){return r.n});
     var body={contents:[{parts:[{text:geminiTagPrompt(names)}]}],generationConfig:{temperature:0.1}};
     return geminiPost(apiKey,body).then(function(resp){
-      var tags=parseGeminiTags(resp,chunk.length);
-      chunk.forEach(function(r,j){r.g=tags[j]});
+      var parsed=parseGeminiTags(resp,chunk.length);
+      chunk.forEach(function(r,j){setBillTag(r.i,parsed[j])});
       done+=chunk.length;
       geminiProgress='תויגו '+done+'/'+batch.length+' הצעות';
-      blSave();render();
+      saveGeminiTags();render();
     });
   }
   var i=0;
@@ -1327,7 +1334,8 @@ function showGeminiSettings(){
 }
 function geminiFilterHtml(b){
   if(!b||!b.rows.length)return'';
-  var topics=Object.create(null);b.rows.forEach(function(r){if(r.g)topics[r.g]=(topics[r.g]||0)+1});
+  var tags=loadGeminiTags();
+  var topics=Object.create(null);b.rows.forEach(function(r){var g=tags[r.i];if(g)topics[g]=(topics[g]||0)+1});
   var keys=GEMINI_TOPICS.filter(function(t){return topics[t]});
   if(!keys.length)return'';
   return'<div style="margin:8px 0;display:flex;flex-wrap:wrap;gap:4px">'
@@ -1342,12 +1350,13 @@ function wipeCaches(){
   try{localStorage.removeItem(IKEY)}catch(e){}
   try{localStorage.removeItem(LKEY)}catch(e){}
   try{localStorage.removeItem(VKEY)}catch(e){}
+  try{localStorage.removeItem(GEMINI_TAGS_STORE)}catch(e){}
   try{localStorage.removeItem(CMT_KEY)}catch(e){}
   try{if(window.Android&&window.Android.wipeBills)window.Android.wipeBills()}catch(e){}
   try{if(window.Android&&window.Android.wipeInitiators)window.Android.wipeInitiators()}catch(e){}
   try{if(window.Android&&window.Android.wipeLaws)window.Android.wipeLaws()}catch(e){}
   try{if(window.Android&&window.Android.wipeVotes)window.Android.wipeVotes()}catch(e){}
-  BL=null;blReady=true;blRun=false;BQ='';INI=null;iniReady=true;iniRun=false;LW=null;lwReady=true;lwRun=false;LQ='';VT=null;vtReady=true;vtRun=false;VQ='';CM=null;cmReady=true;
+  BL=null;blReady=true;blRun=false;BQ='';BQ_TOPIC='';INI=null;iniReady=true;iniRun=false;LW=null;lwReady=true;lwRun=false;LQ='';VT=null;vtReady=true;vtRun=false;VQ='';CM=null;cmReady=true;geminiTags=null;
 }
 function assignEvidence(options,title,type,url){
   var promiseOptions=options.map(function(x){return[x.key,x.label]});

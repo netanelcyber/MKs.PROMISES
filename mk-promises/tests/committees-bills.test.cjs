@@ -7,7 +7,7 @@ const path=require('node:path');
 const vm=require('node:vm');
 const scoring=require('../web/promise-scoring.js');
 const source=fs.readFileSync(path.join(__dirname,'../web/index.html'),'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
-const KEY='mk-promises-v1',CMT_KEY='mk-promises-committees-v1',BKEY='mk-promises-bills-v1',IKEY='mk-promises-initiators-v1',LKEY='mk-promises-laws-v1',VKEY='mk-promises-votes-v1';
+const KEY='mk-promises-v1',CMT_KEY='mk-promises-committees-v1',BKEY='mk-promises-bills-v1',IKEY='mk-promises-initiators-v1',LKEY='mk-promises-laws-v1',VKEY='mk-promises-votes-v1',GTKEY='mk-promises-gemini-tags-v1';
 const BASE='https://knesset.gov.il/OdataV4/ParliamentInfo/';
 const clone=value=>JSON.parse(JSON.stringify(value));
 const fixture=()=>({v:1,mks:[{id:'m1',name:'חבר כנסת לבדיקה',faction:'סיעה',knesset:'25',isNew:false,apiPersonId:123,
@@ -436,7 +436,7 @@ test('wiping all data also clears the local bills and committee caches, includin
   const nb=androidBills();const ni=androidInitiators();const nl=androidLaws();const nv=androidVotes();
   const h=app({android:{...nb.api,...ni.api,...nl.api,...nv.api,shareText(t){}},storage:{[CMT_KEY]:{win:{from:'2026-04-27',to:'2026-10-27'},committees:[],sessions:[],roles:[]},[BKEY]:{knesset:25,rows:[],nextSkip:0,done:false,loadedAt:''}}});
   h.click('menu');h.submit({act:'wipe'});await h.flush();h.submit({});await h.flush();
-  assert.deepEqual(h.record(),{v:1,mks:[]});assert.equal(h.storage.has(CMT_KEY),false);assert.equal(h.storage.has(BKEY),false);assert.equal(h.storage.has(IKEY),false);assert.equal(h.storage.has(LKEY),false);assert.equal(h.storage.has(VKEY),false);assert.equal(nb.calls.wipe,1);assert.equal(ni.calls.wipe,1);assert.equal(nl.calls.wipe,1);assert.equal(nv.calls.wipe,1);
+  assert.deepEqual(h.record(),{v:1,mks:[]});assert.equal(h.storage.has(CMT_KEY),false);assert.equal(h.storage.has(BKEY),false);assert.equal(h.storage.has(IKEY),false);assert.equal(h.storage.has(LKEY),false);assert.equal(h.storage.has(VKEY),false);assert.equal(h.storage.has(GTKEY),false);assert.equal(nb.calls.wipe,1);assert.equal(ni.calls.wipe,1);assert.equal(nl.calls.wipe,1);assert.equal(nv.calls.wipe,1);
   assert.equal(h.hooks.cm(),null);assert.equal(h.hooks.bl(),null);assert.equal(h.hooks.ini(),null);assert.equal(h.hooks.lw(),null);assert.equal(h.hooks.vt(),null);
 });
 
@@ -472,9 +472,9 @@ test('Gemini tagging calls the API with bill names and stores topic tags',async(
   assert.ok(geminiCalls.length>=1);
   assert.match(geminiCalls[0],/generativelanguage\.googleapis\.com/);
   assert.match(geminiCalls[0],/key=test-key-abc/);
-  const b=h.hooks.bl();
-  const tagged=b.rows.filter(r=>r.g==='חינוך');
-  assert.ok(tagged.length>=20);
+  const tags=h.written(GTKEY);
+  const taggedCount=Object.values(tags).filter(v=>v==='חינוך').length;
+  assert.ok(taggedCount>=20);
 });
 
 test('Gemini native bridge decodes the response and resolves the promise',async()=>{
@@ -491,19 +491,19 @@ test('Gemini native bridge decodes the response and resolves the promise',async(
   await h.flush();
   assert.equal(capturedKey,'native-key');
   assert.ok(capturedJson);
-  const tags=bills.map((_,i)=>({i,g:'ביטחון'}));
-  const body=JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(tags)}]}}]});
+  const gemTags=bills.map((_,i)=>({i,g:'ביטחון'}));
+  const body=JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(gemTags)}]}}]});
   const b64=Buffer.from(body).toString('base64');
   h.window.__geminiDone(capturedId,true,200,b64);
   await h.settle();
-  const b=h.hooks.bl();
-  assert.equal(b.rows[0].g,'ביטחון');
-  assert.equal(b.rows[4].g,'ביטחון');
+  const tags=h.written(GTKEY);
+  assert.equal(tags['1'],'ביטחון');
+  assert.equal(tags['5'],'ביטחון');
 });
 
 test('Gemini topic filter narrows displayed bills',()=>{
-  const bills=[{i:1,k:25,n:'חוק א',t:'',g:'חינוך'},{i:2,k:25,n:'חוק ב',t:'',g:'ביטחון'},{i:3,k:25,n:'חוק ג',t:''}];
-  const h=app({storage:{[BKEY]:{knesset:25,rows:bills,nextSkip:400,done:true,loadedAt:'2024-01-01T00:00:00Z'}}});
+  const bills=[{i:1,k:25,n:'חוק א',t:''},{i:2,k:25,n:'חוק ב',t:''},{i:3,k:25,n:'חוק ג',t:''}];
+  const h=app({storage:{[BKEY]:{knesset:25,rows:bills,nextSkip:400,done:true,loadedAt:'2024-01-01T00:00:00Z'},[GTKEY]:{'1':'חינוך','2':'ביטחון'}}});
   h.click('openBills');
   assert.match(h.html(),/חינוך/);
   assert.match(h.html(),/ביטחון/);
