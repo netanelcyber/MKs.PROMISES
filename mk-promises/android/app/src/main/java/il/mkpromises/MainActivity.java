@@ -58,6 +58,27 @@ public class MainActivity extends Activity {
         return b.append('"').toString();
     }
 
+    /** True only for names that resolve exclusively to public addresses (no loopback, LAN, link-local or unique-local). */
+    static boolean isPublicHost(String host) {
+        if (host == null || host.isEmpty() || host.equalsIgnoreCase("localhost")) {
+            return false;
+        }
+        try {
+            for (java.net.InetAddress a : java.net.InetAddress.getAllByName(host)) {
+                byte[] b = a.getAddress();
+                boolean uniqueLocal = b.length == 16 && (b[0] & 0xfe) == 0xfc;
+                boolean cgnat = b.length == 4 && (b[0] & 0xff) == 100 && (b[1] & 0xc0) == 64;
+                if (a.isAnyLocalAddress() || a.isLoopbackAddress() || a.isLinkLocalAddress()
+                        || a.isSiteLocalAddress() || a.isMulticastAddress() || uniqueLocal || cgnat) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -203,6 +224,64 @@ public class MainActivity extends Activity {
                         c.setRequestProperty("Accept", "text/html");
                         c.setRequestProperty("Accept-Language", "he");
                         c.setRequestProperty("User-Agent", "mk-promises/1.0 (metadata only)");
+                        status = c.getResponseCode();
+                        if (status >= 300 && status < 400 && c.getHeaderField("Location") != null) {
+                            current = new URL(u, c.getHeaderField("Location")).toString();
+                            c.disconnect();
+                            c = null;
+                            continue;
+                        }
+                        break;
+                    }
+                    if (c == null) {
+                        throw new IOException("too many redirects");
+                    }
+                    InputStream in = status >= 400 ? c.getErrorStream() : c.getInputStream();
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    if (in != null) {
+                        byte[] buf = new byte[8192];
+                        int n;
+                        while ((n = in.read(buf)) > 0 && out.size() < 3 * 1024 * 1024) {
+                            out.write(buf, 0, n);
+                        }
+                        in.close();
+                    }
+                    body = out.toString("UTF-8");
+                    ok = status >= 200 && status < 300;
+                } catch (Exception e) {
+                    body = String.valueOf(e.getMessage());
+                }
+                final String b64 = Base64.encodeToString(body.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+                final int st = status;
+                final boolean k = ok;
+                runOnUiThread(() -> web.evaluateJavascript(
+                        "window.__nativeDone(" + id + "," + k + "," + st + ",'" + b64 + "')", null));
+            }).start();
+        }
+
+        /** Fetch a public https page chosen by the user (a party platform page) as HTML. Private and local addresses are refused. */
+        @JavascriptInterface
+        public void httpGetWeb(final int id, final String url) {
+            new Thread(() -> {
+                int status = 0;
+                boolean ok = false;
+                String body = "";
+                try {
+                    String current = url;
+                    HttpURLConnection c = null;
+                    for (int hop = 0; hop < 4; hop++) {
+                        URL u = new URL(current);
+                        if (!"https".equals(u.getProtocol()) || u.getUserInfo() != null
+                                || (u.getPort() != -1 && u.getPort() != 443) || !isPublicHost(u.getHost())) {
+                            throw new IOException("address not allowed");
+                        }
+                        c = (HttpURLConnection) u.openConnection();
+                        c.setInstanceFollowRedirects(false);
+                        c.setConnectTimeout(15000);
+                        c.setReadTimeout(30000);
+                        c.setRequestProperty("Accept", "text/html");
+                        c.setRequestProperty("Accept-Language", "he");
+                        c.setRequestProperty("User-Agent", "mk-promises/1.0");
                         status = c.getResponseCode();
                         if (status >= 300 && status < 400 && c.getHeaderField("Location") != null) {
                             current = new URL(u, c.getHeaderField("Location")).toString();

@@ -50,3 +50,9 @@ test('labelRows exports labelled evidence of the 25th Knesset only',()=>{
     {name:'ב',knesset:'24',promises:[{text:'הבטחה',evidence:[{title:'כתבה',effect:'contradict'}]}]}]};
   assert.deepEqual(clone(c.labelRows(st,25)),[{promise:'הבטחה',utterance:'כתבה',label:'support',group:'א',source:'https://x'}]);
 });
+
+test('parsePromises keeps promise-like lines from a party page and drops menus and scripts',()=>{
+  const page='<nav><li>תפריט ראשי של האתר כולו כאן</li></nav><script><li>קוד קוד קוד קוד קוד קוד קוד</li></script>'
+   +'<h2>נקים מערכת בריאות ציבורית חזקה יותר לכולם</h2><ul><li>נוריד את מחירי הדיור בעשור הקרוב</li><li>קצר</li><li>נוריד את מחירי הדיור בעשור הקרוב</li></ul><p>English only text that is long enough to pass length</p>';
+  assert.deepEqual(clone(ctx.parsePromises(page)),['נקים מערכת בריאות ציבורית חזקה יותר לכולם','נוריד את מחירי הדיור בעשור הקרוב']);
+});

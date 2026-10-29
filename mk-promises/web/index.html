@@ -890,12 +890,13 @@ function parseArticles(html,base){
   }
   return out;
 }
-function getPage(url){
+function getPage(url,method){
+  method=method||'httpGetPage';
   return new Promise(function(res,rej){
-    if(!(window.Android&&window.Android.httpGetPage)){rej(new Error('native-only'));return}
+    if(!(window.Android&&window.Android[method])){rej(new Error('native-only'));return}
     var id=++nid,timer=setTimeout(function(){delete pending[id];rej(new Error('זמן ההמתנה לאתר הסתיים'))},NETWORK_TIMEOUT);
     pending[id]={url:url,res:function(t){clearTimeout(timer);delete pending[id];res(t)},rej:function(e){clearTimeout(timer);delete pending[id];rej(e)}};
-    try{window.Android.httpGetPage(id,url)}catch(e){clearTimeout(timer);delete pending[id];rej(new Error('החיבור לאתר נכשל'))}
+    try{window.Android[method](id,url)}catch(e){clearTimeout(timer);delete pending[id];rej(new Error('החיבור לאתר נכשל'))}
   });
 }
 function mrAttach(member,target,effect,items){
@@ -957,6 +958,46 @@ function mrChoose(member,items){
       var saved=save();render();if(saved)toast(n?'נוספו '+n+' כתבות':'הכתבות כבר קיימות');
     });
   }
+}
+
+/* ---------- promises from a party platform page (the promise to the voter is published on the party site) ---------- */
+function parsePromises(html){
+  var out=[],seen={},re=/<(li|p|h[2-4])\b[^>]*>([\s\S]*?)<\/\1>/gi,m,page=String(html).replace(/<(script|style|nav|footer|header)\b[\s\S]*?<\/\1>/gi,' ');
+  while((m=re.exec(page))&&out.length<80){
+    var t=mrDecode(m[2]);
+    if(t.length<20||t.length>260||(t.match(/[א-ת]/g)||[]).length<15||seen[t])continue;
+    seen[t]=1;out.push(t);
+  }
+  return out;
+}
+function partyImport(member){
+  return ask('הבטחות מאתר המפלגה: '+member.name,[
+    {k:'url',label:'קישור לעמוד מצע / הבטחות באתר המפלגה',type:'url',required:true},
+    {k:'election',label:'בחירות',type:'select',value:'2022',options:Object.keys(ELECTION).map(function(k){return[k,ELECTION[k]]})}
+  ],'חיפוש',{intro:'האפליקציה קוראת את העמוד ומציעה שורות שנראות כהבטחות. אתה בוחר מה לייבא. הקישור נשמר כמקור ההבטחה.'}).then(function(o){
+    if(!o)return;
+    if(!/^https:\/\//i.test(o.url)){toast('נדרש קישור https');return}
+    toast('קורא את עמוד המפלגה…');
+    return getPage(o.url,'httpGetWeb').then(function(html){
+      var items=parsePromises(html);
+      if(!items.length){toast('לא נמצאו שורות שנראות כהבטחות בעמוד');return}
+      var fields=items.map(function(t,i){return{k:'a'+i,label:t,type:'checkbox'}});
+      return ask('בחרו הבטחות לייבוא',fields,'ייבוא',{
+        intro:'בדקו מול העמוד עצמו. כותרות ותפריטים עלולים להיכנס בטעות.',
+        validate:function(r){return items.some(function(t,i){return r['a'+i]})?'':'סמנו לפחות שורה אחת'}
+      }).then(function(r){
+        if(!r||S.mks.indexOf(member)<0)return;
+        var today=new Date().toISOString().slice(0,10),n=0;
+        items.forEach(function(t,i){
+          if(!r['a'+i]||member.promises.some(function(p){return p.text===t&&p.sourceUrl===o.url}))return;
+          member.promises.push({id:uid(),text:t,topic:'',sourceUrl:o.url,sourceDate:today,status:'unchecked',note:'',evidence:[],election:o.election});n++;
+        });
+        var saved=save();render();if(saved)toast('נוספו '+n+' הבטחות');
+      });
+    },function(e){
+      toast(e&&e.message==='native-only'?'קריאת אתר המפלגה זמינה רק באפליקציית האנדרואיד':'הקריאה נכשלה: '+String((e&&e.message)||e).slice(0,120));
+    });
+  });
 }
 
 /* ---------- stance model that runs on the device (hashed encoder + BiLSTM + DNN, exported by ml/export_js.py) ---------- */
@@ -1142,7 +1183,7 @@ function renderMk(m){
     (p.evidence||[]).forEach(function(e){
       h+='<div class="ev '+esc(e.effect)+'"><div>'+esc(e.title)+'</div>'+(e.excerpt?'<blockquote class="protocol-quote">'+esc(e.excerpt)+'</blockquote>':'')+(e.protocol?'<div class="mute">'+esc(e.protocol.committee||'פרוטוקול ועדה')+(e.protocol.date?' · '+esc(e.protocol.date):'')+'</div>':'')+'<div class="mute">'+esc(e.type)+' · '+esc(EFFECT[e.effect]||'')+(e.date?' · '+esc(e.date):'')+' · '+link(e.url)+' <button class="lnk danger" data-a="delEv" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'" data-e="'+esc(e.id)+'">מחיקה</button></div></div>'});
     h+='<div class="row" style="margin-top:8px"><button class="sec" data-a="addEv" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">+ ראיה</button><button class="lnk" data-a="editPromise" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">עריכה</button><button class="lnk danger" data-a="delPromise" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">מחיקה</button></div></div>'});
-  h+='<div class="row"><h2 class="grow">פעילות ציבורית קודמת</h2><button class="sec" data-a="addBg" data-id="'+esc(m.id)+'">+ פריט</button><button class="sec" data-a="mrImport" data-id="'+esc(m.id)+'">ייבוא ממקור ראשון</button><button class="sec" data-a="loadModel">טעינת מודל</button></div>';
+  h+='<div class="row"><h2 class="grow">פעילות ציבורית קודמת</h2><button class="sec" data-a="addBg" data-id="'+esc(m.id)+'">+ פריט</button><button class="sec" data-a="partyImport" data-id="'+esc(m.id)+'">הבטחות מאתר המפלגה</button><button class="sec" data-a="mrImport" data-id="'+esc(m.id)+'">ייבוא ממקור ראשון</button><button class="sec" data-a="loadModel">טעינת מודל</button></div>';
   h+='<p class="mute">תפקידים, פרסומים והצהרות פומביות שאפשר לקשר למקור. בלי פרטים פרטיים.</p>';
   m.background.forEach(function(b){
     h+='<div class="card"><div>'+esc(b.title)+'</div><div class="mute">'+(b.period?esc(b.period)+' · ':'')+link(b.url)+'</div>'+(b.note?'<div class="mute">'+esc(b.note)+'</div>':'')
@@ -1175,6 +1216,7 @@ var A={
   delPromise:function(d){var m=mk(d.id);confirmAction('למחוק את ההבטחה?').then(function(yes){if(!yes)return;m.promises=m.promises.filter(function(p){return p.id!==d.p});save();render()})},
   addEv:function(d){evForm(mk(d.id),d.p)},
   delEv:function(d){var p=mk(d.id).promises.find(function(x){return x.id===d.p});p.evidence=p.evidence.filter(function(e){return e.id!==d.e});save();render()},
+  partyImport:function(d){var m=mk(d.id);if(m)partyImport(m)},
   loadModel:function(){stancePick()},
   mrImport:function(d){var m=mk(d.id);if(m)mrImport(m)},
   addBg:function(d){var m=mk(d.id);ask('פעילות ציבורית קודמת',[{k:'title',label:'תיאור (תפקיד / פרסום / הצהרה)',required:true},{k:'period',label:'תקופה'},{k:'url',label:'קישור למקור',type:'url',required:true},{k:'note',label:'הערה',type:'textarea'}]).then(function(o){if(!o)return;o.id=uid();m.background.push(o);save();render()})},
