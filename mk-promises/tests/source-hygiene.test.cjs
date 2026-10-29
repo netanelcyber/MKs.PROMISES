@@ -49,8 +49,3 @@ test('Java sources contain no active unicode escape for a line terminator',()=>{
   assert.ok(active.test('x = "'+bs+'u2028";'));
   assert.ok(!active.test('x = "'+bs+bs+'u2028";'));
 });
-
-test('the Java string-quoting helper uses numeric labels for the separators',()=>{
-  const java=fs.readFileSync(path.join(repoRoot,'mk-promises/android/app/src/main/java/il/mkpromises/MainActivity.java'),'utf8');
-  assert.match(java,/case 0x2028:/);assert.match(java,/case 0x2029:/);
-});

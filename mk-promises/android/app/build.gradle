@@ -25,10 +25,4 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
-    // The web app is the single source of truth: package ../../web as the app's assets.
-    sourceSets {
-        main {
-            assets.srcDirs = ['../../web']
-        }
-    }
 }

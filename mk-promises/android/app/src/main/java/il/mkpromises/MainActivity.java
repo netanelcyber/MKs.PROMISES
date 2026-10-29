@@ -2,441 +2,229 @@ package il.mkpromises;
 
 import android.app.Activity;
 import android.content.Intent;
-import android.net.Uri;
+import android.graphics.Color;
 import android.os.Bundle;
-import android.util.Base64;
-import android.webkit.JavascriptInterface;
-import android.webkit.WebResourceRequest;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.ValueCallback;
-import android.webkit.WebChromeClient;
-import android.webkit.WebViewClient;
-
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.util.Locale;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 
 import org.json.JSONObject;
 
-/** Hosts the bundled web app in a WebView and gives it a small native bridge. */
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+/** Native host: a header, a content area, and a stack of screens. No WebView. */
 public class MainActivity extends Activity {
 
-    private static final String KNESSET_ODATA = "https://knesset.gov.il/OdataV4/ParliamentInfo/";
-
-    private WebView web;
-    private BillsLoader bills;
-    private ValueCallback<Uri[]> fileCallback;
-    private static final int PICK_FILE = 4711;
-
-    /**
-     * Quotes a string as a JavaScript string literal that is also safe inside an inline script.
-     * U+2028 and U+2029 are written as numeric case labels on purpose: a raw copy of either
-     * character in this file is a line terminator to javac and breaks the build.
-     */
-    private static String jsq(String s) {
-        StringBuilder b = new StringBuilder("\"");
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '\\': b.append("\\\\"); break;
-                case '"': b.append("\\\""); break;
-                case '\n': b.append("\\n"); break;
-                case '\r': b.append("\\r"); break;
-                case '<': b.append("\\u003c"); break;
-                case 0x2028: b.append("\\u2028"); break;
-                case 0x2029: b.append("\\u2029"); break;
-                default: b.append(c);
-            }
-        }
-        return b.append('"').toString();
+    interface Callback<T> {
+        void run(T value);
     }
 
-    /** True only for names that resolve exclusively to public addresses (no loopback, LAN, link-local or unique-local). */
-    static boolean isPublicHost(String host) {
-        if (host == null || host.isEmpty() || host.equalsIgnoreCase("localhost")) {
-            return false;
-        }
-        try {
-            for (java.net.InetAddress a : java.net.InetAddress.getAllByName(host)) {
-                byte[] b = a.getAddress();
-                boolean uniqueLocal = b.length == 16 && (b[0] & 0xfe) == 0xfc;
-                boolean cgnat = b.length == 4 && (b[0] & 0xff) == 100 && (b[1] & 0xc0) == 64;
-                if (a.isAnyLocalAddress() || a.isLoopbackAddress() || a.isLinkLocalAddress()
-                        || a.isSiteLocalAddress() || a.isMulticastAddress() || uniqueLocal || cgnat) {
-                    return false;
-                }
-            }
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
-    }
+    Store store;
+    private final Deque<Screen> stack = new ArrayDeque<>();
+    private final ExecutorService pool = Executors.newFixedThreadPool(2);
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private TextView titleView;
+    private FrameLayout content;
+    private LinearLayout headerActions;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        web = new WebView(this);
-        setContentView(web);
+        store = new Store(getFilesDir());
 
-        WebSettings s = web.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);
-        s.setAllowFileAccess(true);
-        s.setAllowFileAccessFromFileURLs(false);
-        s.setAllowUniversalAccessFromFileURLs(false);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        root.setBackgroundColor(Color.rgb(0xf4, 0xf6, 0xf8));
 
-        // The $skip loop over KNS_Bill runs in Java; each finished page is reported to the page.
-        bills = new BillsLoader(new File(getFilesDir(), "bills"), KNESSET_ODATA, (state, skip, msg) ->
-                runOnUiThread(() -> web.evaluateJavascript(
-                        "window.__billsNative&&window.__billsNative(" + jsq(state) + "," + skip + "," + jsq(msg) + ")", null)));
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setBackgroundColor(Ui.BRAND);
+        int pad = Ui.dp(this, 12);
+        header.setPadding(pad, pad, pad, pad);
+        titleView = Ui.text(this, "מעקב הבטחות", 20, true, Color.WHITE);
+        header.addView(titleView, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        headerActions = new LinearLayout(this);
+        headerActions.setOrientation(LinearLayout.HORIZONTAL);
+        header.addView(headerActions);
+        root.addView(header, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        web.addJavascriptInterface(new Bridge(), "Android");
-        web.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                Uri u = request.getUrl();
-                String scheme = u.getScheme();
-                if ("http".equals(scheme) || "https".equals(scheme)) {
-                    startActivity(new Intent(Intent.ACTION_VIEW, u));
-                    return true;
-                }
-                return false;
-            }
-        });
-        // <input type="file"> support, used to load a model file exported by ml/export_js.py.
-        web.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
-                if (fileCallback != null) {
-                    fileCallback.onReceiveValue(null);
-                }
-                fileCallback = callback;
-                try {
-                    startActivityForResult(params.createIntent(), PICK_FILE);
-                } catch (Exception e) {
-                    fileCallback = null;
-                    callback.onReceiveValue(null);
-                    return false;
-                }
-                return true;
-            }
-        });
-        web.loadUrl("file:///android_asset/index.html");
+        content = new FrameLayout(this);
+        root.addView(content, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        setContentView(root);
+
+        push(new HomeScreen());
     }
 
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (requestCode == PICK_FILE && fileCallback != null) {
-            fileCallback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data));
-            fileCallback = null;
-            return;
+    // ------------------------------------------------------------------ navigation
+
+    void push(Screen s) {
+        stack.push(s);
+        refresh();
+    }
+
+    void pop() {
+        if (stack.size() > 1) {
+            stack.pop();
+            refresh();
         }
-        super.onActivityResult(requestCode, resultCode, data);
     }
 
     @Override
     public void onBackPressed() {
-        web.evaluateJavascript("window.__back && window.__back()", value -> {
-            if (!"true".equals(value)) {
-                MainActivity.super.onBackPressed();
+        if (stack.size() > 1) {
+            pop();
+        } else {
+            super.onBackPressed();
+        }
+    }
+
+    /** Rebuild the visible screen from the current data. */
+    void refresh() {
+        Screen s = stack.peek();
+        if (s == null) {
+            return;
+        }
+        titleView.setText(s.title());
+        headerActions.removeAllViews();
+        if (stack.size() > 1) {
+            headerActions.addView(headerButton("חזרה", v -> pop()));
+        } else {
+            headerActions.addView(headerButton("גיבוי", v -> Backup.menu(this)));
+        }
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        int pad = Ui.dp(this, 12);
+        FrameLayout holder = new FrameLayout(this);
+        holder.setPadding(pad, pad, pad, pad);
+        holder.addView(s.build(this));
+        scroll.addView(holder);
+        content.removeAllViews();
+        content.addView(scroll);
+    }
+
+    private View headerButton(String label, View.OnClickListener l) {
+        TextView t = Ui.text(this, label, 15, true, Color.WHITE);
+        int pad = Ui.dp(this, 8);
+        t.setPadding(pad, pad, pad, pad);
+        t.setOnClickListener(l);
+        return t;
+    }
+
+    // ------------------------------------------------------------------ data and background work
+
+    /** Save, and tell the user when saving failed. */
+    boolean save() {
+        boolean ok = store.save();
+        if (!ok) {
+            Ui.toastLong(this, "השמירה נכשלה. בדקו מקום פנוי במכשיר");
+        }
+        return ok;
+    }
+
+    /** Run work off the UI thread; deliver the result (or the error) back on it. */
+    <T> void background(Callable<T> work, Callback<T> done, Callback<Exception> failed) {
+        pool.execute(() -> {
+            try {
+                final T value = work.call();
+                ui.post(() -> {
+                    if (!isFinishing()) {
+                        done.run(value);
+                    }
+                });
+            } catch (final Exception e) {
+                ui.post(() -> {
+                    if (!isFinishing()) {
+                        failed.run(e);
+                    }
+                });
             }
         });
     }
 
-    /** Methods callable from the page as window.Android.*. */
-    private class Bridge {
+    <T> void background(Callable<T> work, Callback<T> done) {
+        background(work, done, e -> Ui.toastLong(this, "הפעולה נכשלה: " + message(e)));
+    }
 
-        /**
-         * GET a Knesset URL natively (no CORS) and hand the body back to the page
-         * as base64 through window.__nativeDone(id, ok, status, b64).
-         * Only https hosts under knesset.gov.il are allowed.
-         */
-        @JavascriptInterface
-        public void httpGet(final int id, final String url) {
-            new Thread(() -> {
-                int status = 0;
-                boolean ok = false;
-                String body = "";
-                try {
-                    URL u = new URL(url);
-                    String host = u.getHost();
-                    boolean allowed = "https".equals(u.getProtocol())
-                            && (host.equals("knesset.gov.il") || host.endsWith(".knesset.gov.il"));
-                    if (!allowed) {
-                        throw new IOException("host not allowed");
+    static String message(Exception e) {
+        String m = e.getMessage();
+        return m == null || m.isEmpty() ? e.getClass().getSimpleName() : m;
+    }
+
+    private Callback<String> pickCallback;
+    private static final int PICK_FILE = 4711;
+
+    /** Let the user pick a text file (a model, a backup) and deliver its content. */
+    void pickFile(Callback<String> onText) {
+        pickCallback = onText;
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        startActivityForResult(i, PICK_FILE);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != PICK_FILE || pickCallback == null) {
+            return;
+        }
+        final Callback<String> cb = pickCallback;
+        pickCallback = null;
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            return;
+        }
+        final android.net.Uri uri = data.getData();
+        background(() -> {
+            java.io.InputStream in = getContentResolver().openInputStream(uri);
+            if (in == null) {
+                throw new java.io.IOException("לא ניתן לקרוא את הקובץ");
+            }
+            try {
+                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    out.write(buf, 0, n);
+                    if (out.size() > 64 * 1024 * 1024) {
+                        throw new java.io.IOException("הקובץ גדול מדי");
                     }
-                    HttpURLConnection c = (HttpURLConnection) u.openConnection();
-                    c.setConnectTimeout(15000);
-                    c.setReadTimeout(30000);
-                    c.setRequestProperty("Accept", "application/json");
-                    status = c.getResponseCode();
-                    InputStream in = status >= 400 ? c.getErrorStream() : c.getInputStream();
-                    ByteArrayOutputStream out = new ByteArrayOutputStream();
-                    if (in != null) {
-                        byte[] buf = new byte[8192];
-                        int n;
-                        while ((n = in.read(buf)) > 0) {
-                            out.write(buf, 0, n);
-                        }
-                        in.close();
-                    }
-                    body = out.toString("UTF-8");
-                    ok = status >= 200 && status < 300;
-                } catch (Exception e) {
-                    body = String.valueOf(e.getMessage());
                 }
-                final String b64 = Base64.encodeToString(body.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
-                final int st = status;
-                final boolean k = ok;
-                runOnUiThread(() -> web.evaluateJavascript(
-                        "window.__nativeDone(" + id + "," + k + "," + st + ",'" + b64 + "')", null));
-            }).start();
-        }
+                return new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+            } finally {
+                in.close();
+            }
+        }, cb::run);
+    }
 
-        /** Fetch one Makor Rishon search page as HTML (title and link are extracted by the page; no article text is kept). */
-        @JavascriptInterface
-        public void httpGetPage(final int id, final String url) {
-            new Thread(() -> {
-                int status = 0;
-                boolean ok = false;
-                String body = "";
-                try {
-                    String current = url;
-                    HttpURLConnection c = null;
-                    for (int hop = 0; hop < 4; hop++) {
-                        URL u = new URL(current);
-                        String host = u.getHost().toLowerCase(Locale.ROOT);
-                        if (!"https".equals(u.getProtocol()) || u.getUserInfo() != null
-                                || !(host.equals("makorrishon.co.il") || host.equals("www.makorrishon.co.il"))) {
-                            throw new IOException("host not allowed");
-                        }
-                        c = (HttpURLConnection) u.openConnection();
-                        c.setInstanceFollowRedirects(false);
-                        c.setConnectTimeout(15000);
-                        c.setReadTimeout(30000);
-                        c.setRequestProperty("Accept", "text/html");
-                        c.setRequestProperty("Accept-Language", "he");
-                        c.setRequestProperty("User-Agent", "mk-promises/1.0 (metadata only)");
-                        status = c.getResponseCode();
-                        if (status >= 300 && status < 400 && c.getHeaderField("Location") != null) {
-                            current = new URL(u, c.getHeaderField("Location")).toString();
-                            c.disconnect();
-                            c = null;
-                            continue;
-                        }
-                        break;
-                    }
-                    if (c == null) {
-                        throw new IOException("too many redirects");
-                    }
-                    InputStream in = status >= 400 ? c.getErrorStream() : c.getInputStream();
-                    ByteArrayOutputStream out = new ByteArrayOutputStream();
-                    if (in != null) {
-                        byte[] buf = new byte[8192];
-                        int n;
-                        while ((n = in.read(buf)) > 0 && out.size() < 3 * 1024 * 1024) {
-                            out.write(buf, 0, n);
-                        }
-                        in.close();
-                    }
-                    body = out.toString("UTF-8");
-                    ok = status >= 200 && status < 300;
-                } catch (Exception e) {
-                    body = String.valueOf(e.getMessage());
-                }
-                final String b64 = Base64.encodeToString(body.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
-                final int st = status;
-                final boolean k = ok;
-                runOnUiThread(() -> web.evaluateJavascript(
-                        "window.__nativeDone(" + id + "," + k + "," + st + ",'" + b64 + "')", null));
-            }).start();
-        }
+    @Override
+    protected void onDestroy() {
+        pool.shutdownNow();
+        super.onDestroy();
+    }
 
-        /** Fetch a public https page chosen by the user (a party platform page) as HTML. Private and local addresses are refused. */
-        @JavascriptInterface
-        public void httpGetWeb(final int id, final String url) {
-            new Thread(() -> {
-                int status = 0;
-                boolean ok = false;
-                String body = "";
-                try {
-                    String current = url;
-                    HttpURLConnection c = null;
-                    for (int hop = 0; hop < 4; hop++) {
-                        URL u = new URL(current);
-                        if (!"https".equals(u.getProtocol()) || u.getUserInfo() != null
-                                || (u.getPort() != -1 && u.getPort() != 443) || !isPublicHost(u.getHost())) {
-                            throw new IOException("address not allowed");
-                        }
-                        c = (HttpURLConnection) u.openConnection();
-                        c.setInstanceFollowRedirects(false);
-                        c.setConnectTimeout(15000);
-                        c.setReadTimeout(30000);
-                        c.setRequestProperty("Accept", "text/html");
-                        c.setRequestProperty("Accept-Language", "he");
-                        c.setRequestProperty("User-Agent", "mk-promises/1.0");
-                        status = c.getResponseCode();
-                        if (status >= 300 && status < 400 && c.getHeaderField("Location") != null) {
-                            current = new URL(u, c.getHeaderField("Location")).toString();
-                            c.disconnect();
-                            c = null;
-                            continue;
-                        }
-                        break;
-                    }
-                    if (c == null) {
-                        throw new IOException("too many redirects");
-                    }
-                    InputStream in = status >= 400 ? c.getErrorStream() : c.getInputStream();
-                    ByteArrayOutputStream out = new ByteArrayOutputStream();
-                    if (in != null) {
-                        byte[] buf = new byte[8192];
-                        int n;
-                        while ((n = in.read(buf)) > 0 && out.size() < 3 * 1024 * 1024) {
-                            out.write(buf, 0, n);
-                        }
-                        in.close();
-                    }
-                    body = out.toString("UTF-8");
-                    ok = status >= 200 && status < 300;
-                } catch (Exception e) {
-                    body = String.valueOf(e.getMessage());
-                }
-                final String b64 = Base64.encodeToString(body.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
-                final int st = status;
-                final boolean k = ok;
-                runOnUiThread(() -> web.evaluateJavascript(
-                        "window.__nativeDone(" + id + "," + k + "," + st + ",'" + b64 + "')", null));
-            }).start();
+    List<JSONObject> membersSorted() {
+        List<JSONObject> list = new ArrayList<>();
+        for (int i = 0; i < store.mks().length(); i++) {
+            JSONObject m = store.mks().optJSONObject(i);
+            if (m != null) {
+                list.add(m);
+            }
         }
-
-        /** Read an official committee source through the configured Selenium service. */
-        @JavascriptInterface
-        public void httpReadProtocol(final int id, final String url, final String token, final String json) {
-            new Thread(() -> {
-                int status = 0;
-                boolean ok = false;
-                String body = "";
-                HttpURLConnection connection = null;
-                try {
-                    URL endpoint = new URL(url);
-                    if (!"https".equals(endpoint.getProtocol()) || endpoint.getUserInfo() != null
-                            || endpoint.getQuery() != null || endpoint.getRef() != null
-                            || !endpoint.getPath().endsWith("/api/protocols")) {
-                        throw new IOException("invalid protocol service endpoint");
-                    }
-                    JSONObject payload = new JSONObject(json);
-                    Object requested = payload.opt("url");
-                    if (payload.length() != 1 || !(requested instanceof String)
-                            || ((String) requested).length() > 4096) {
-                        throw new IOException("invalid protocol request");
-                    }
-                    URL source = new URL((String) requested);
-                    String host = source.getHost().toLowerCase(Locale.ROOT);
-                    if (!"https".equals(source.getProtocol()) || source.getUserInfo() != null
-                            || (source.getPort() != -1 && source.getPort() != 443)
-                            || !(host.equals("knesset.gov.il") || host.endsWith(".knesset.gov.il"))) {
-                        throw new IOException("official HTTPS source required");
-                    }
-                    byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-                    if (bytes.length > 32768 || (token != null && token.length() > 512)) {
-                        throw new IOException("protocol request too large");
-                    }
-                    if (token != null) {
-                        for (int i = 0; i < token.length(); i++) {
-                            if (token.charAt(i) < 33 || token.charAt(i) > 126) {
-                                throw new IOException("invalid protocol token");
-                            }
-                        }
-                    }
-                    connection = (HttpURLConnection) endpoint.openConnection();
-                    connection.setRequestMethod("POST");
-                    connection.setInstanceFollowRedirects(false);
-                    connection.setConnectTimeout(15000);
-                    connection.setReadTimeout(75000);
-                    connection.setDoOutput(true);
-                    connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-                    connection.setRequestProperty("Accept", "application/json");
-                    if (token != null && !token.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + token);
-                    connection.setFixedLengthStreamingMode(bytes.length);
-                    try (OutputStream out = connection.getOutputStream()) { out.write(bytes); }
-                    status = connection.getResponseCode();
-                    InputStream response = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
-                    ByteArrayOutputStream out = new ByteArrayOutputStream();
-                    if (response != null) {
-                        try (InputStream in = response) {
-                            byte[] buffer = new byte[8192];
-                            int count;
-                            while ((count = in.read(buffer)) != -1) {
-                                if (out.size() + count > 524288) throw new IOException("protocol response too large");
-                                out.write(buffer, 0, count);
-                            }
-                        }
-                    }
-                    body = out.toString("UTF-8");
-                    ok = status >= 200 && status < 300;
-                } catch (Exception e) {
-                    status = 0;
-                    body = "{\"error\":{\"message\":\"החיבור לשירות הפרוטוקולים נכשל או שהתשובה חרגה מהמגבלה\"}}";
-                } finally {
-                    if (connection != null) connection.disconnect();
-                }
-                final String b64 = Base64.encodeToString(body.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
-                final int st = status;
-                final boolean success = ok;
-                runOnUiThread(() -> web.evaluateJavascript(
-                        "window.__protocolNativeDone && window.__protocolNativeDone(" + id + "," + success + "," + st + ",'" + b64 + "')", null));
-            }).start();
-        }
-
-        /**
-         * Starts (or continues) the KNS_Bill loop: $skip = 0, 100, 200, ... until an empty page.
-         * Returns false if a run is already active. Progress arrives through
-         * window.__billsNative(state, skip, msg).
-         */
-        @JavascriptInterface
-        public boolean startBills(int knesset, boolean fresh) {
-            return bills.start(knesset, fresh);
-        }
-
-        @JavascriptInterface
-        public void stopBills() {
-            bills.stop();
-        }
-
-        /** JSON describing the saved run ({knesset,nextSkip,done,loadedAt}) or an empty string. */
-        @JavascriptInterface
-        public String billsMeta() {
-            return bills.meta();
-        }
-
-        /** The raw OData JSON of the page saved at this $skip, or an empty string. */
-        @JavascriptInterface
-        public String billsPage(int skip) {
-            return bills.page(skip);
-        }
-
-        @JavascriptInterface
-        public void wipeBills() {
-            bills.wipe();
-        }
-
-        /** Opens the system share sheet with plain text (used for data export). */
-        @JavascriptInterface
-        public void shareText(final String text) {
-            runOnUiThread(() -> {
-                Intent i = new Intent(Intent.ACTION_SEND);
-                i.setType("text/plain");
-                i.putExtra(Intent.EXTRA_TEXT, text);
-                startActivity(Intent.createChooser(i, null));
-            });
-        }
+        java.util.Collections.sort(list, (a, b) -> a.optString("name").compareTo(b.optString("name")));
+        return list;
     }
 }
