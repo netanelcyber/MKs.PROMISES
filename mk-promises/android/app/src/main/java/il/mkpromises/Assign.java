@@ -29,6 +29,19 @@ final class Assign {
         return true;
     }
 
+    /** Quiet variant for bulk assignment: no save, toast or refresh. */
+    static boolean addBill(JSONObject member, long billId, String name, String subType, String role) {
+        JSONArray bills = J.array(member, "bills");
+        for (int i = 0; i < bills.length(); i++) {
+            if (bills.optJSONObject(i).optLong("billId") == billId) {
+                return false;
+            }
+        }
+        bills.put(J.obj("id", Store.uid(), "billId", billId, "name", name, "subType", subType == null ? "" : subType,
+                "role", role, "url", Odata.BASE + "KNS_Bill(" + billId + ")"));
+        return true;
+    }
+
     interface Done {
         void done(int added);
     }

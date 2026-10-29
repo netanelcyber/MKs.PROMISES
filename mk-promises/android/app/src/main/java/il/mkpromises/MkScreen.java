@@ -58,6 +58,7 @@ final class MkScreen implements Screen {
         more.addView(Ui.button(app, "פרוטוקול ידני", v -> CommitteeImport.start(app, m)));
         root.addView(more);
         LinearLayout bills2 = Ui.row(app);
+        bills2.addView(Ui.button(app, "שיוך אוטומטי: יוזם / הצביע בכל 3 הקריאות", v -> AutoAssign.run(app, m)));
         bills2.addView(Ui.button(app, "ועדות מול הצעות החוק שלו (כנסת 25)", v -> CommitteeImport.auto(app, m, true)));
         root.addView(bills2);
 
@@ -98,7 +99,7 @@ final class MkScreen implements Screen {
                 LinearLayout card = Ui.card(app);
                 card.addView(Ui.body(app, b.optString("name")));
                 if (!b.optString("subType").isEmpty()) {
-                    card.addView(Ui.mute(app, b.optString("subType")));
+                    card.addView(Ui.mute(app, b.optString("subType") + (b.optString("role").isEmpty() ? "" : " · " + b.optString("role"))));
                 }
                 card.addView(linkRow(app, b.optString("url"), "הסרה", () -> {
                     assigned.remove(J.indexOf(assigned, "id", b.optString("id")));
