@@ -19,6 +19,7 @@ final class PartyImport {
         List<Ui.Field> f = new ArrayList<>();
         f.add(new Ui.Field("url", "קישור לעמוד מצע / הבטחות באתר המפלגה", Ui.URL).required());
         f.add(Vocab.select(new Ui.Field("election", "בחירות", Ui.SELECT).value("2022"), Vocab.ELECTION));
+        f.add(new Ui.Field("crawl", "סריקה פנימית של האתר (עד " + PartyCrawler.MAX_PAGES + " עמודי מצע, בכבוד ל-robots.txt)", Ui.CHECK).value("true"));
         Ui.form(app, "הבטחות מאתר המפלגה: " + member.optString("name"),
                 "האפליקציה קוראת את העמוד ומציעה שורות שנראות כהבטחות. אתה בוחר מה לייבא. הקישור נשמר כמקור ההבטחה.", f, "חיפוש", v -> {
                     final String url = v.get("url");
@@ -27,22 +28,34 @@ final class PartyImport {
                         return;
                     }
                     Ui.toast(app, "קורא את עמוד המפלגה…");
-                    app.background(() -> Html.promises(Http.get(url, "text/html", Http.PUBLIC)), lines -> {
+                    final boolean crawl = "true".equals(v.get("crawl"));
+                    app.background(() -> {
+                        List<PartyCrawler.Found> out = new ArrayList<>();
+                        if (crawl) {
+                            out.addAll(PartyCrawler.crawl(url, (n, page) -> app.runOnUiThread(() -> Ui.toast(app, "סורק עמוד " + n + "…"))));
+                        } else {
+                            for (String line : Html.promises(Http.get(url, "text/html", Http.PUBLIC))) {
+                                out.add(new PartyCrawler.Found(line, url));
+                            }
+                        }
+                        return out;
+                    }, lines -> {
                         if (lines.isEmpty()) {
-                            Ui.toast(app, "לא נמצאו שורות שנראות כהבטחות בעמוד");
+                            Ui.toast(app, "לא נמצאו שורות שנראות כהבטחות");
                             return;
                         }
-                        choose(app, member, url, v.get("election"), lines);
+                        choose(app, member, v.get("election"), lines);
                     });
                 });
     }
 
-    private static void choose(MainActivity app, JSONObject member, String url, String election, List<String> lines) {
+    private static void choose(MainActivity app, JSONObject member, String election, List<PartyCrawler.Found> all) {
+        List<PartyCrawler.Found> lines = all.subList(0, Math.min(150, all.size()));
         List<Ui.Field> f = new ArrayList<>();
         for (int i = 0; i < lines.size(); i++) {
-            f.add(new Ui.Field("a" + i, lines.get(i), Ui.CHECK));
+            f.add(new Ui.Field("a" + i, lines.get(i).text, Ui.CHECK));
         }
-        Ui.form(app, "בחרו הבטחות לייבוא", "בדקו מול העמוד עצמו. כותרות ותפריטים עלולים להיכנס בטעות.", f, "ייבוא", v -> {
+        Ui.form(app, "בחרו הבטחות לייבוא", "כל שורה נשמרת עם העמוד שממנו נלקחה. בדקו מול העמוד: כותרות ותפריטים עלולים להיכנס בטעות. מוצגות עד 150 שורות.", f, "ייבוא", v -> {
             String today = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
             JSONArray promises = member.optJSONArray("promises");
             int added = 0;
@@ -53,12 +66,12 @@ final class PartyImport {
                 boolean exists = false;
                 for (int k = 0; k < promises.length(); k++) {
                     JSONObject p = promises.optJSONObject(k);
-                    exists |= lines.get(i).equals(p.optString("text")) && url.equals(p.optString("sourceUrl"));
+                    exists |= lines.get(i).text.equals(p.optString("text")) && lines.get(i).url.equals(p.optString("sourceUrl"));
                 }
                 if (exists) {
                     continue;
                 }
-                promises.put(J.obj("id", Store.uid(), "text", lines.get(i), "topic", "", "sourceUrl", url, "sourceDate", today,
+                promises.put(J.obj("id", Store.uid(), "text", lines.get(i).text, "topic", "", "sourceUrl", lines.get(i).url, "sourceDate", today,
                         "status", "unchecked", "note", "", "evidence", new JSONArray(), "election", election));
                 added++;
             }

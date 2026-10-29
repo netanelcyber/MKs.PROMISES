@@ -77,6 +77,29 @@ final class Html {
         return out;
     }
 
+    /** Same-host https links of a page: url (no query or fragment) -> anchor text. */
+    static Map<String, String> links(String html, String pageUrl) {
+        Map<String, String> out = new LinkedHashMap<>();
+        Matcher m = ANCHOR.matcher(html);
+        URI base = URI.create(pageUrl);
+        while (m.find() && out.size() < 300) {
+            URI u;
+            try {
+                u = base.resolve(text(m.group(1)).replace(" ", "%20"));
+            } catch (Exception e) {
+                continue;
+            }
+            if (!"https".equals(u.getScheme()) || u.getHost() == null || !u.getHost().equalsIgnoreCase(base.getHost())) {
+                continue;
+            }
+            String url = "https://" + u.getHost() + (u.getPath() == null ? "" : u.getPath());
+            if (!out.containsKey(url)) {
+                out.put(url, text(m.group(2)));
+            }
+        }
+        return out;
+    }
+
     /** Lines of a page that look like promises: Hebrew list items, paragraphs and headings of 20-260 characters. */
     static List<String> promises(String html) {
         List<String> out = new ArrayList<>();
