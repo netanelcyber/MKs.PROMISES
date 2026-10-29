@@ -36,6 +36,7 @@ final class AutoTrain {
             }
             int[] weak = new int[1];
             List<Stance.Row> rows = build(app.store.mks(), bills, weak);
+            rows.addAll(GeminiLabel.rows(app));
             int[] seen = new int[3];
             for (Stance.Row r : rows) {
                 seen[r.label]++;
@@ -122,6 +123,46 @@ final class AutoTrain {
         }
         weakCount[0] = weak;
         return rows;
+    }
+
+    /** Up to n new (promise, bill) pairs with shared content words: {key, promise, bill title, promise id}. */
+    static List<String[]> candidates(JSONArray mks, JSONArray bills, int n, Set<String> skip) {
+        Map<String, List<Integer>> index = new HashMap<>();
+        for (int i = 0; i < bills.length(); i++) {
+            for (String w : content(bills.optJSONObject(i).optString("n"))) {
+                index.computeIfAbsent(w, x -> new ArrayList<>()).add(i);
+            }
+        }
+        List<String[]> out = new ArrayList<>();
+        for (int mi = 0; mi < mks.length() && out.size() < n; mi++) {
+            JSONArray ps = mks.optJSONObject(mi).optJSONArray("promises");
+            for (int pi = 0; ps != null && pi < ps.length() && out.size() < n; pi++) {
+                JSONObject p = ps.optJSONObject(pi);
+                Set<String> pt = content(p.optString("text"));
+                Map<Integer, Integer> hits = new HashMap<>();
+                for (String w : pt) {
+                    List<Integer> l = index.get(w);
+                    for (int k = 0; l != null && k < l.size() && k < 2000; k++) {
+                        hits.merge(l.get(k), 1, Integer::sum);
+                    }
+                }
+                List<Map.Entry<Integer, Integer>> sorted = new ArrayList<>(hits.entrySet());
+                sorted.sort((a, b) -> b.getValue() - a.getValue());
+                int taken = 0;
+                for (Map.Entry<Integer, Integer> e : sorted) {
+                    if (e.getValue() < 2 || taken >= 3 || out.size() >= n) {
+                        break;
+                    }
+                    JSONObject b = bills.optJSONObject(e.getKey());
+                    String key = p.optString("id") + "|" + b.optLong("i");
+                    if (!skip.contains(key)) {
+                        out.add(new String[]{key, p.optString("text"), b.optString("n"), p.optString("id")});
+                        taken++;
+                    }
+                }
+            }
+        }
+        return out;
     }
 
     /** Content words: at least 3 letters, one-letter Hebrew prefix removed, common legal filler dropped. */
