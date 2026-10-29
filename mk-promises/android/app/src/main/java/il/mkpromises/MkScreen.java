@@ -54,13 +54,16 @@ final class MkScreen implements Screen {
         imports.addView(Ui.button(app, "כתבות מקור ראשון", v -> MakorImport.start(app, m)));
         root.addView(imports);
         LinearLayout more = Ui.row(app);
-        more.addView(Ui.button(app, "טען פעילות בוועדות למודל", v -> CommitteeImport.auto(app, m)));
-        more.addView(Ui.button(app, "פרוטוקול ידני", v -> CommitteeImport.start(app, m)));
+        more.addView(Ui.button(app, "הצעות חוק", v -> {
+            if (m.has("apiPersonId")) {
+                loadBills(app, m);
+                AutoAssign.run(app, m);
+            } else {
+                Ui.toast(app, "הצעות חוק נטענות רק לחבר כנסת שנטען מהכנסת");
+            }
+        }));
+        more.addView(Ui.button(app, "ועדות", v -> committees(app, m)));
         root.addView(more);
-        LinearLayout bills2 = Ui.row(app);
-        bills2.addView(Ui.button(app, "שיוך אוטומטי: יוזם / הצביע בכל 3 הקריאות", v -> AutoAssign.run(app, m)));
-        bills2.addView(Ui.button(app, "ועדות מול הצעות החוק שלו (כנסת 25)", v -> CommitteeImport.auto(app, m, true)));
-        root.addView(bills2);
 
         JSONArray promises = m.optJSONArray("promises");
         if (promises.length() == 0) {
@@ -112,7 +115,6 @@ final class MkScreen implements Screen {
         if (m.has("apiPersonId")) {
             LinearLayout bl = Ui.row(app);
             bl.addView(Ui.heading(app, "הצעות חוק (מה-API)"), new LinearLayout.LayoutParams(0, -2, 1f));
-            bl.addView(Ui.button(app, "טעינה", v -> loadBills(app, m)));
             root.addView(bl);
             if (bills != null) {
                 if (bills.isEmpty()) {
@@ -283,6 +285,25 @@ final class MkScreen implements Screen {
                     "url", v.get("url"), "note", v.get("note")));
             app.save();
             app.refresh();
+        });
+    }
+
+    /** One button for everything committee-related. */
+    private void committees(MainActivity app, JSONObject m) {
+        List<Ui.Field> f = new ArrayList<>();
+        f.add(new Ui.Field("act", "פעולה", Ui.SELECT).option("promises", "פעילות בוועדות מול ההבטחות (למודל)")
+                .option("bills", "פעילות בוועדות מול הצעות החוק שלו (כנסת 25)").option("manual", "פרוטוקול ידני"));
+        Ui.form(app, "ועדות", "בחרו מה לעשות עם פעילות הח\"כ בוועדות.", f, "המשך", v -> {
+            switch (v.get("act")) {
+                case "bills":
+                    CommitteeImport.auto(app, m, true);
+                    break;
+                case "manual":
+                    CommitteeImport.start(app, m);
+                    break;
+                default:
+                    CommitteeImport.auto(app, m);
+            }
         });
     }
 
