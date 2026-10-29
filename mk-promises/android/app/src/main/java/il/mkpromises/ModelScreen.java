@@ -18,17 +18,29 @@ final class ModelScreen {
             status = "אין מודל. אפשר לאמן מהתיוגים שלך או לטעון קובץ שיוצא מ-ml/export_js.py.";
         } else {
             JSONObject mt = m.metrics;
-            status = (m.light ? "מודל קל שאומן במכשיר" : "מודל BiLSTM+DNN (מובנה ב-APK או נטען מקובץ)") + (m.synthetic ? " (אומן על נתונים סינתטיים, לא אמין)" : "")
+            status = (m.light ? "מודל קל שאומן במכשיר" : "מודל BiLSTM+DNN, " + m.lstmLayers + " שכבות (מובנה ב-APK או נטען מקובץ)") + (m.synthetic ? " (אומן על נתונים סינתטיים, לא אמין)" : "")
                     + (mt == null ? "" : "\nדיוק בולידציה: " + Math.round(mt.optDouble("accuracy") * 100) + "%, macro-F1: "
                     + Math.round(mt.optDouble("macroF1") * 100) + "% על " + mt.optInt("valSize") + " דוגמאות");
         }
         List<Ui.Field> f = new ArrayList<>();
         f.add(new Ui.Field("act", "פעולה", Ui.SELECT).option("train", "אימון מודל על המכשיר מהתיוגים שלי")
-                .option("load", "טעינת קובץ מודל").option("clear", "הסרת המודל שלי (חוזר למובנה)"));
+                .option("b2", "מודל מובנה: 2 שכבות LSTM").option("b4", "מודל מובנה: 4 שכבות LSTM")
+                .option("b8", "מודל מובנה: 8 שכבות LSTM").option("load", "טעינת קובץ מודל").option("clear", "הסרת המודל שלי (חוזר למובנה)"));
         Ui.form(app, "מודל הצעות", status + "\nההצעות אינן משנות סטטוס ואינן נבחרות אוטומטית.", f, "המשך", v -> {
             switch (v.get("act")) {
                 case "train":
                     train(app);
+                    break;
+                case "b2":
+                case "b4":
+                case "b8":
+                    int layers = Integer.parseInt(v.get("act").substring(1));
+                    try {
+                        Stance.useBundled(app, layers);
+                        Ui.toast(app, "הופעל מודל " + layers + " שכבות (אומן על נתונים סינתטיים, לא אמין)");
+                    } catch (Exception e) {
+                        Ui.toastLong(app, "הטעינה נכשלה: " + MainActivity.message(e));
+                    }
                     break;
                 case "load":
                     app.pickFile(text -> {

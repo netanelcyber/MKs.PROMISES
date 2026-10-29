@@ -96,16 +96,16 @@ final class Stance {
                 current = null;
             }
             if (current == null) {
-                current = bundled(app);
+                current = bundled(app, "models/stance-2layers.json");
             }
         }
         return current;
     }
 
-    /** The model packaged in the APK (assets/stance-model.json), or null. A model the user trained or loaded takes priority. */
-    private static Model bundled(MainActivity app) {
+    /** The model packaged in the APK (assets/models/), or null. A model the user trained or loaded takes priority. */
+    private static Model bundled(MainActivity app, String asset) {
         try {
-            java.io.InputStream in = app.getAssets().open("stance-model.json");
+            java.io.InputStream in = app.getAssets().open(asset);
             try {
                 java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
                 byte[] buf = new byte[65536];
@@ -120,6 +120,15 @@ final class Stance {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /** Make one of the packaged models (2, 4 or 8 LSTM layers) the active one. */
+    static synchronized void useBundled(MainActivity app, int layers) throws Exception {
+        Model m = bundled(app, "models/stance-" + layers + "layers.json");
+        if (m == null) {
+            throw new Exception("המודל המובנה לא נמצא");
+        }
+        set(app, m);
     }
 
     static synchronized void set(MainActivity app, Model m) throws Exception {
