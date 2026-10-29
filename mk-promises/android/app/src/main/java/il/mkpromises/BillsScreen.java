@@ -78,7 +78,7 @@ final class BillsScreen implements Screen {
             LinearLayout card = Ui.card(app);
             card.addView(Ui.body(app, r.optString("n")));
             card.addView(Ui.mute(app, r.optString("s")));
-            card.addView(Ui.button(app, "שיוך להבטחה", v -> assign(app, r)));
+            card.addView(Ui.button(app, "שיוך לחבר כנסת", v -> assign(app, r)));
             list.addView(card, Ui.match(app, 8));
         }
         if (shown == 60) {
@@ -139,26 +139,21 @@ final class BillsScreen implements Screen {
     }
 
     private void assign(MainActivity app, JSONObject bill) {
-        List<JSONObject> withPromises = new ArrayList<>();
-        for (JSONObject m : app.membersSorted()) {
-            if (m.optJSONArray("promises").length() > 0) {
-                withPromises.add(m);
-            }
-        }
-        if (withPromises.isEmpty()) {
-            Ui.toast(app, "קודם הוסיפו הבטחה לחבר כנסת");
+        List<JSONObject> members = app.membersSorted();
+        if (members.isEmpty()) {
+            Ui.toast(app, "קודם הוסיפו או טענו חברי כנסת");
             return;
         }
         List<Ui.Field> f = new ArrayList<>();
         Ui.Field who = new Ui.Field("m", "חבר כנסת", Ui.SELECT);
-        for (JSONObject m : withPromises) {
+        for (JSONObject m : members) {
             who.option(m.optString("id"), m.optString("name"));
         }
         f.add(who);
-        Ui.form(app, "שיוך הצעת חוק", bill.optString("n"), f, "המשך", v -> {
+        Ui.form(app, "שיוך הצעת חוק לחבר כנסת", bill.optString("n"), f, "שיוך", v -> {
             JSONObject m = app.store.mk(v.get("m"));
             if (m != null) {
-                Assign.evidence(app, m, bill.optString("n"), "הצעת חוק", Odata.BASE + "KNS_Bill(" + bill.optLong("i") + ")", null);
+                Assign.bill(app, m, bill.optLong("i"), bill.optString("n"), bill.optString("s"));
             }
         });
     }

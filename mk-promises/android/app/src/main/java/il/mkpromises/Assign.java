@@ -12,6 +12,23 @@ final class Assign {
     private Assign() {
     }
 
+    /** Attach a bill directly to the member (not to a promise). Returns false when it was already attached. */
+    static boolean bill(MainActivity app, JSONObject member, long billId, String name, String subType) {
+        JSONArray bills = J.array(member, "bills");
+        for (int i = 0; i < bills.length(); i++) {
+            if (bills.optJSONObject(i).optLong("billId") == billId) {
+                Ui.toast(app, "ההצעה כבר משויכת לחבר הכנסת");
+                return false;
+            }
+        }
+        bills.put(J.obj("id", Store.uid(), "billId", billId, "name", name, "subType", subType == null ? "" : subType,
+                "url", Odata.BASE + "KNS_Bill(" + billId + ")"));
+        app.save();
+        app.refresh();
+        Ui.toast(app, "ההצעה שויכה ל" + member.optString("name"));
+        return true;
+    }
+
     interface Done {
         void done(int added);
     }

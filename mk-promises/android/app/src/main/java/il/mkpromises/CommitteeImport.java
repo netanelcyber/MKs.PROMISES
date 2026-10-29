@@ -165,7 +165,11 @@ final class CommitteeImport {
             }
             List<Ref> refs = new ArrayList<>();
             if (useBills) {
-                List<JSONObject> bills = Members.bills(pid);
+                JSONArray attached = member.optJSONArray("bills");
+                for (int i = 0; attached != null && i < attached.length() && refs.size() < MAX_BILLS; i++) {
+                    refs.add(new Ref("bill:" + attached.optJSONObject(i).optLong("billId"), attached.optJSONObject(i).optString("name"), true));
+                }
+                List<JSONObject> bills = refs.isEmpty() ? Members.bills(pid) : new ArrayList<JSONObject>();
                 java.util.Collections.sort(bills, (x, y) -> Long.compare(y.optLong("BillID"), x.optLong("BillID")));
                 for (JSONObject b : bills) {
                     if (b.optInt("KnessetNum") == 25 && refs.size() < MAX_BILLS) {

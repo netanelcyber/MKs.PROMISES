@@ -90,6 +90,24 @@ final class MkScreen implements Screen {
             root.addView(card, Ui.match(app, 8));
         }
 
+        JSONArray assigned = m.optJSONArray("bills");
+        if (assigned != null && assigned.length() > 0) {
+            root.addView(Ui.heading(app, "הצעות חוק משויכות לח\"כ"));
+            for (int i = 0; i < assigned.length(); i++) {
+                final JSONObject b = assigned.optJSONObject(i);
+                LinearLayout card = Ui.card(app);
+                card.addView(Ui.body(app, b.optString("name")));
+                if (!b.optString("subType").isEmpty()) {
+                    card.addView(Ui.mute(app, b.optString("subType")));
+                }
+                card.addView(linkRow(app, b.optString("url"), "הסרה", () -> {
+                    assigned.remove(J.indexOf(assigned, "id", b.optString("id")));
+                    app.save();
+                    app.refresh();
+                }));
+                root.addView(card, Ui.match(app, 8));
+            }
+        }
         if (m.has("apiPersonId")) {
             LinearLayout bl = Ui.row(app);
             bl.addView(Ui.heading(app, "הצעות חוק (מה-API)"), new LinearLayout.LayoutParams(0, -2, 1f));
@@ -103,7 +121,8 @@ final class MkScreen implements Screen {
                     LinearLayout card = Ui.card(app);
                     card.addView(Ui.body(app, b.optString("Name")));
                     card.addView(Ui.mute(app, "הכנסת ה-" + b.optInt("KnessetNum") + " · " + b.optString("SubTypeDesc")));
-                    card.addView(Ui.button(app, "שיוך להבטחה", v -> assignBill(app, m, b)));
+                    card.addView(Ui.button(app, "שיוך לחבר הכנסת", v ->
+                            Assign.bill(app, m, b.optLong("BillID"), b.optString("Name"), b.optString("SubTypeDesc"))));
                     root.addView(card, Ui.match(app, 8));
                 }
             }
@@ -278,9 +297,5 @@ final class MkScreen implements Screen {
             app.refresh();
             Ui.toast(app, "נטענו " + list.size() + " הצעות");
         });
-    }
-
-    private void assignBill(MainActivity app, JSONObject m, JSONObject bill) {
-        Assign.evidence(app, m, bill.optString("Name"), "הצעת חוק", Odata.BASE + "KNS_Bill(" + bill.optLong("BillID") + ")", null);
     }
 }
