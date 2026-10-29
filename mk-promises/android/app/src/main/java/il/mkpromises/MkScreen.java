@@ -57,6 +57,9 @@ final class MkScreen implements Screen {
         more.addView(Ui.button(app, "טען פעילות בוועדות למודל", v -> CommitteeImport.auto(app, m)));
         more.addView(Ui.button(app, "פרוטוקול ידני", v -> CommitteeImport.start(app, m)));
         root.addView(more);
+        LinearLayout bills2 = Ui.row(app);
+        bills2.addView(Ui.button(app, "ועדות מול הצעות החוק שלו (כנסת 25)", v -> CommitteeImport.auto(app, m, true)));
+        root.addView(bills2);
 
         JSONArray promises = m.optJSONArray("promises");
         if (promises.length() == 0) {
