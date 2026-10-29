@@ -45,11 +45,11 @@ function app(options={}){
       }
     }
   }
-  const nodes=Object.fromEntries(['app','items','title','backBtn','toast','apiFailure','blProg','blItems','iniProg','lwProg','lwItems','vtProg','vtItems'].map(id=>[id,new Element(id)]));
+  const nodes=Object.fromEntries(['app','items','title','backBtn','toast','apiFailure','blProg','blItems','iniProg','lwProg','lwItems','vtProg','vtItems','gemProg'].map(id=>[id,new Element(id)]));
   nodes.dlgForm=new Form('dlgForm');nodes.dlg=Object.assign(new Element('dlg'),{open:false,onclose:null,
     showModal(){assert.equal(this.open,false);this.open=true},close(){if(!this.open)return;this.open=false;state.tasks.push(()=>{if(this.onclose)this.onclose()})}});
   const document={activeElement:null,getElementById(id){
-    if(['items','apiFailure','blProg','blItems','iniProg','lwProg','lwItems','vtProg','vtItems'].includes(id)&&!nodes.app.innerHTML.includes('id="'+id+'"'))return null;
+    if(['items','apiFailure','blProg','blItems','iniProg','lwProg','lwItems','vtProg','vtItems','gemProg'].includes(id)&&!nodes.app.innerHTML.includes('id="'+id+'"'))return null;
     return nodes[id]||null;
   },addEventListener(name,fn){listeners[name]=fn}};
   const window={scrollTo(){},MKPromiseScoring:scoring,Android:options.android===undefined?{shareText(text){state.shares.push(text)}}:options.android};
@@ -447,4 +447,68 @@ test('the back button leaves the committee, committees, bills, laws and votes sc
   h.click('openLaws');assert.equal(h.hooks.view().name,'laws');h.window.__back();assert.equal(h.hooks.view().name,'list');
   h.click('openVotes');assert.equal(h.hooks.view().name,'votes');h.window.__back();assert.equal(h.hooks.view().name,'list');
   h.click('openCmts');assert.equal(h.nodes.backBtn.hidden,false);h.nodes.backBtn.listeners.click();assert.equal(h.hooks.view().name,'list');
+});
+
+/* ---------- Gemini auto-tag ---------- */
+
+test('Gemini tagging calls the API with bill names and stores topic tags',async()=>{
+  const bills=Array.from({length:25},(_,i)=>({i:i+1,k:25,n:'הצעת חוק '+String(i+1),t:'פרטית'}));
+  const geminiCalls=[];
+  const h=app({
+    storage:{[BKEY]:{knesset:25,rows:bills,nextSkip:2600,done:true,loadedAt:'2024-01-01T00:00:00Z'},'mk-promises-gemini-key-v1':'test-key-abc'},
+    route(url){
+      if(url.hostname==='generativelanguage.googleapis.com'){
+        geminiCalls.push(url.toString());
+        const tags=Array.from({length:20},(_,i)=>({i,g:'חינוך'}));
+        return reply({candidates:[{content:{parts:[{text:JSON.stringify(tags)}]}}]});
+      }
+      return reply({value:[]});
+    }
+  });
+  h.click('openBills');
+  assert.match(h.html(),/תיוג אוטומטי/);
+  h.click('geminiTag');
+  await h.settle();
+  assert.ok(geminiCalls.length>=1);
+  assert.match(geminiCalls[0],/generativelanguage\.googleapis\.com/);
+  assert.match(geminiCalls[0],/key=test-key-abc/);
+  const b=h.hooks.bl();
+  const tagged=b.rows.filter(r=>r.g==='חינוך');
+  assert.ok(tagged.length>=20);
+});
+
+test('Gemini native bridge decodes the response and resolves the promise',async()=>{
+  const bills=Array.from({length:5},(_,i)=>({i:i+1,k:25,n:'הצעת חוק '+String(i+1),t:'פרטית'}));
+  let capturedId,capturedKey,capturedJson;
+  const h=app({
+    android:{
+      shareText(){},
+      httpGemini(id,apiKey,json){capturedId=id;capturedKey=apiKey;capturedJson=json}
+    },
+    storage:{[BKEY]:{knesset:25,rows:bills,nextSkip:600,done:true,loadedAt:'2024-01-01T00:00:00Z'},'mk-promises-gemini-key-v1':'native-key'}
+  });
+  h.click('openBills');h.click('geminiTag');
+  await h.flush();
+  assert.equal(capturedKey,'native-key');
+  assert.ok(capturedJson);
+  const tags=bills.map((_,i)=>({i,g:'ביטחון'}));
+  const body=JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(tags)}]}}]});
+  const b64=Buffer.from(body).toString('base64');
+  h.window.__geminiDone(capturedId,true,200,b64);
+  await h.settle();
+  const b=h.hooks.bl();
+  assert.equal(b.rows[0].g,'ביטחון');
+  assert.equal(b.rows[4].g,'ביטחון');
+});
+
+test('Gemini topic filter narrows displayed bills',()=>{
+  const bills=[{i:1,k:25,n:'חוק א',t:'',g:'חינוך'},{i:2,k:25,n:'חוק ב',t:'',g:'ביטחון'},{i:3,k:25,n:'חוק ג',t:''}];
+  const h=app({storage:{[BKEY]:{knesset:25,rows:bills,nextSkip:400,done:true,loadedAt:'2024-01-01T00:00:00Z'}}});
+  h.click('openBills');
+  assert.match(h.html(),/חינוך/);
+  assert.match(h.html(),/ביטחון/);
+  h.click('filterTopic',{b:'חינוך'});
+  const items=h.nodes.blItems?.innerHTML||h.html();
+  assert.match(items,/חוק א/);
+  assert.ok(!items.includes('חוק ב'));
 });

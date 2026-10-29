@@ -58,6 +58,7 @@ button:disabled{opacity:.55;cursor:wait}
   <button id="backBtn" hidden aria-label="חזרה">→ חזרה</button>
   <h1 id="title">מעקב הבטחות</h1>
   <button data-a="protocolSettings">פרוטוקולים</button>
+  <button data-a="geminiSettings">Gemini</button>
   <button data-a="menu">⋮ גיבוי</button>
 </header>
 <main id="app"></main>
@@ -747,6 +748,9 @@ var INI=null,iniReady=false,iniRun=false,iniStop=false;
 var LKEY='mk-promises-laws-v1',LW_MAX_SKIP=300000,LW_DELAY=120;
 var LW=null,lwReady=false,lwRun=false,lwStop=false,LQ='';
 var VKEY='mk-promises-votes-v1',VT_MAX_SKIP=300000,VT_DELAY=120;
+var GEMINI_KEY_STORE='mk-promises-gemini-key-v1';
+var GEMINI_TOPICS=['ביטחון','כלכלה','חינוך','בריאות','חברה ורווחה','משפט','סביבה','תחבורה','דת ומדינה','תקשורת וטכנולוגיה','שלטון מקומי','עבודה','דיור','חקלאות','אחר'];
+var geminiRunning=false,geminiProgress='';
 var VT=null,vtReady=false,vtRun=false,vtStop=false,VQ='';
 function isNativeBills(){return!!(window.Android&&window.Android.startBills)}
 function blRead(){
@@ -856,7 +860,17 @@ function renderBills(){
    +'<div id="blProg" class="mute"></div><div class="row" style="margin-top:8px">'
    +(blRun?'<button class="pri" data-a="stopBills">עצירה</button>':'<button class="pri" data-a="loadAllBills">'+(b&&!b.done?'המשך טעינה':'טעינת כל הצעות החוק')+'</button>'+(b?'<button class="sec" data-a="freshBills">טעינה מחדש / כנסת אחרת</button>':''))
    +'</div><div class="mute" style="margin-top:8px">הטעינה רצה במכשיר ומביאה 100 הצעות בכל בקשה: <span dir="ltr">$skip</span> עולה ב-100 עד שמתקבל עמוד ריק. ההצעות נשמרות במכשיר ולא נכללות בגיבוי.</div></div>';
-  if(b&&b.rows.length)h+='<input id="bq" type="search" placeholder="חיפוש בשם הצעת החוק" value="'+esc(BQ)+'"><div id="blItems" style="margin-top:12px"></div>';
+  if(b&&b.rows.length){
+    var tagged=b.rows.filter(function(r){return!!r.g}).length;
+    h+='<div class="card"><h3>תיוג אוטומטי (Gemini)</h3><div class="mute">'+tagged+'/'+b.rows.length+' הצעות מתויגות</div>'
+     +'<div id="gemProg" class="mute">'+(geminiProgress?esc(geminiProgress):'')+'</div>'
+     +'<div class="row" style="margin-top:8px">'
+     +(geminiRunning?'<button class="pri" disabled>תיוג פועל...</button>':'<button class="pri" data-a="geminiTag">תיוג אוטומטי (100 הצעות)</button>')
+     +'<button class="sec" data-a="geminiSettings">הגדרות Gemini</button></div></div>';
+    h+='<input id="bq" type="search" placeholder="חיפוש בשם הצעת החוק" value="'+esc(BQ)+'">';
+    h+=geminiFilterHtml(b);
+    h+='<div id="blItems" style="margin-top:12px"></div>';
+  }
   return h;
 }
 function mkNameByPersonId(pid){
@@ -865,14 +879,16 @@ function mkNameByPersonId(pid){
 function renderBillItems(){
   var el=document.getElementById('blItems'),b=bl();if(!el||!b)return;
   var d=ini(),hasIni=d&&d.rows.length>0;
-  var q=BQ.trim().toLowerCase(),list=q?b.rows.filter(function(x){return x.n.toLowerCase().indexOf(q)>=0}):b.rows;
+  var q=BQ.trim().toLowerCase(),list=b.rows;
+  if(q)list=list.filter(function(x){return x.n.toLowerCase().indexOf(q)>=0});
+  if(BQ_TOPIC)list=list.filter(function(x){return x.g===BQ_TOPIC});
   el.innerHTML='<p class="mute">'+list.length+' תוצאות'+(list.length>50?' · מוצגות 50 הראשונות':'')+'</p>'+list.slice(0,50).map(function(x){
     var inis='';
     if(hasIni){
       var names=initiatorsForBill(x.i).map(function(r){return mkNameByPersonId(r.p)}).filter(Boolean);
       if(names.length)inis=' · יוזמים: '+names.map(esc).join(', ');
     }
-    return'<div class="card"><div>'+esc(x.n)+'</div><div class="mute">הכנסת ה-'+esc(x.k)+(x.t?' · '+esc(x.t):'')+inis+'</div><button class="lnk" data-a="billAssign" data-b="'+esc(x.i)+'">שיוך להבטחה</button></div>';
+    return'<div class="card"><div>'+esc(x.n)+'</div><div class="mute">הכנסת ה-'+esc(x.k)+(x.t?' · '+esc(x.t):'')+inis+(x.g?' · <span class="chip">'+esc(x.g)+'</span>':'')+'</div><button class="lnk" data-a="billAssign" data-b="'+esc(x.i)+'">שיוך להבטחה</button></div>';
   }).join('');
 }
 /* ---------- initiators (bill→MK mapping) ---------- */
@@ -1220,6 +1236,106 @@ function renderVoteItems(){
   }).join('');
 }
 
+/* ---------- Gemini auto-tag ---------- */
+function geminiKey(){try{return localStorage.getItem(GEMINI_KEY_STORE)||''}catch(e){return''}}
+function geminiSaveKey(k){try{localStorage.setItem(GEMINI_KEY_STORE,k)}catch(e){}}
+function isNativeGemini(){return!!(window.Android&&window.Android.httpGemini)}
+var geminiNativePending=Object.create(null),geminiNativeId=0;
+function geminiPost(apiKey,body){
+  if(isNativeGemini()){
+    return new Promise(function(resolve,reject){
+      var id=++geminiNativeId;
+      geminiNativePending[id]={resolve:resolve,reject:reject};
+      try{window.Android.httpGemini(id,apiKey,JSON.stringify(body))}catch(e){delete geminiNativePending[id];reject(e)}
+    });
+  }
+  var url='https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+encodeURIComponent(apiKey);
+  return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){
+    return r.text().then(function(t){
+      if(!r.ok)throw new Error('Gemini HTTP '+r.status+': '+t.slice(0,300));
+      return JSON.parse(t);
+    });
+  });
+}
+window.__geminiDone=function(id,ok,status,b64){
+  var p=geminiNativePending[id];if(!p)return;delete geminiNativePending[id];
+  var body;try{body=new TextDecoder().decode(Uint8Array.from(atob(b64),function(c){return c.charCodeAt(0)}))}catch(e){p.reject(new Error('decode error'));return}
+  if(!ok){p.reject(new Error('Gemini HTTP '+status+': '+body.slice(0,300)));return}
+  try{p.resolve(JSON.parse(body))}catch(e){p.reject(new Error('Gemini JSON parse error: '+body.slice(0,200)))}
+};
+function geminiTagPrompt(names){
+  return 'סווג כל אחת מהצעות החוק הבאות לאחד מהנושאים: '+GEMINI_TOPICS.join(', ')+'.\n'
+    +'החזר JSON בלבד, מערך של אובייקטים עם שדות "i" (מספר סידורי, מתחיל ב-0) ו-"g" (נושא מהרשימה).\n'
+    +'אל תוסיף טקסט מלבד ה-JSON.\n\n'
+    +names.map(function(n,idx){return idx+'. '+n}).join('\n');
+}
+function parseGeminiTags(response,count){
+  var text='';
+  try{text=response.candidates[0].content.parts[0].text}catch(e){throw new Error('תשובת Gemini לא תקינה')}
+  var match=text.match(/\[[\s\S]*\]/);
+  if(!match)throw new Error('לא נמצא JSON בתשובת Gemini');
+  var arr=JSON.parse(match[0]);
+  if(!Array.isArray(arr))throw new Error('תשובת Gemini אינה מערך');
+  var result=[];
+  for(var j=0;j<count;j++){
+    var entry=arr.find(function(x){return x&&x.i===j});
+    var topic=entry&&typeof entry.g==='string'&&GEMINI_TOPICS.indexOf(entry.g)>=0?entry.g:'אחר';
+    result.push(topic);
+  }
+  return result;
+}
+function geminiTagBills(apiKey){
+  var b=bl();if(!b||!b.rows.length){toast('אין הצעות חוק לתיוג');return Promise.resolve()}
+  var untagged=b.rows.filter(function(r){return!r.g});
+  if(!untagged.length){toast('כל ההצעות כבר מתויגות');return Promise.resolve()}
+  var batch=untagged.slice(0,100);
+  geminiRunning=true;geminiProgress='מתחיל תיוג '+batch.length+' הצעות...';render();
+  var CHUNK=20,chunks=[];
+  for(var c=0;c<batch.length;c+=CHUNK)chunks.push(batch.slice(c,c+CHUNK));
+  var done=0;
+  function tagChunk(chunk){
+    var names=chunk.map(function(r){return r.n});
+    var body={contents:[{parts:[{text:geminiTagPrompt(names)}]}],generationConfig:{temperature:0.1}};
+    return geminiPost(apiKey,body).then(function(resp){
+      var tags=parseGeminiTags(resp,chunk.length);
+      chunk.forEach(function(r,j){r.g=tags[j]});
+      done+=chunk.length;
+      geminiProgress='תויגו '+done+'/'+batch.length+' הצעות';
+      blSave();render();
+    });
+  }
+  var i=0;
+  function next(){
+    if(i>=chunks.length){geminiRunning=false;geminiProgress='';render();toast('תויגו '+done+' הצעות חוק');return Promise.resolve()}
+    var chunk=chunks[i++];
+    return tagChunk(chunk).then(function(){return new Promise(function(r){setTimeout(r,500)})}).then(next);
+  }
+  return next().catch(function(e){
+    geminiRunning=false;geminiProgress='';render();
+    toast('תיוג נכשל: '+String(e.message||e).slice(0,200));
+  });
+}
+function showGeminiSettings(){
+  return ask('הגדרות Gemini',[
+    {k:'key',label:'מפתח API של Gemini (Google AI Studio)',type:'password',value:geminiKey()}
+  ],'שמירה',{
+    intro:'המפתח נשמר במכשיר בלבד ואינו נכלל בגיבוי. הוא משמש לתיוג אוטומטי של הצעות חוק לפי נושא.',
+    validate:function(o){if(o.key&&!/^[\x21-\x7e]{10,256}$/.test(o.key))return'מפתח API חייב להיות 10-256 תווי ASCII גלויים'}
+  }).then(function(o){
+    if(!o)return false;geminiSaveKey(o.key);toast('מפתח Gemini נשמר');return true;
+  });
+}
+function geminiFilterHtml(b){
+  if(!b||!b.rows.length)return'';
+  var topics=Object.create(null);b.rows.forEach(function(r){if(r.g)topics[r.g]=(topics[r.g]||0)+1});
+  var keys=GEMINI_TOPICS.filter(function(t){return topics[t]});
+  if(!keys.length)return'';
+  return'<div style="margin:8px 0;display:flex;flex-wrap:wrap;gap:4px">'
+    +'<button class="chip'+(BQ_TOPIC?'':' new')+'" data-a="filterTopic" data-b="">הכל</button>'
+    +keys.map(function(t){return'<button class="chip'+(BQ_TOPIC===t?' new':'')+'" data-a="filterTopic" data-b="'+esc(t)+'">'+esc(t)+' ('+topics[t]+')</button>'}).join('')
+    +'</div>';
+}
+var BQ_TOPIC='';
 function wipeCaches(){
   blStop=true;iniStop=true;lwStop=true;vtStop=true;
   try{localStorage.removeItem(BKEY)}catch(e){}
@@ -1382,6 +1498,13 @@ var A={
     if(!options.length){toast('קודם הוסיפו הבטחה לחבר כנסת');return}
     assignEvidence(options,row.n||('הצעת חוק '+row.i),'הצעת חוק',BASE+'KNS_Bill('+row.i+')');
   },
+  geminiTag:function(){
+    var key=geminiKey();
+    if(!key){showGeminiSettings().then(function(saved){if(saved&&geminiKey())geminiTagBills(geminiKey())});return}
+    geminiTagBills(key);
+  },
+  geminiSettings:function(){showGeminiSettings()},
+  filterTopic:function(d){BQ_TOPIC=d.b||'';renderBillItems()},
   openCmts:function(){view={name:'cmts'};render();window.scrollTo(0,0)},
   openCmt:function(d){var id=apiId(d.id);if(!id)return;view={name:'cmt',id:id};render();window.scrollTo(0,0)},
   loadCmts:function(){clearApiFailure('committees');loadCommittees()},

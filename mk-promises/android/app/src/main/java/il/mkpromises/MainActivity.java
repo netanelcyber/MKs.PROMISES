@@ -355,6 +355,70 @@ public class MainActivity extends Activity {
             votes.wipe();
         }
 
+        /**
+         * POST a JSON body to the Gemini generativeLanguage API and hand the response back
+         * to the page as base64 through window.__geminiDone(id, ok, status, b64).
+         * Only https://generativelanguage.googleapis.com is allowed.
+         */
+        @JavascriptInterface
+        public void httpGemini(final int id, final String apiKey, final String json) {
+            new Thread(() -> {
+                int status = 0;
+                boolean ok = false;
+                String body = "";
+                HttpURLConnection connection = null;
+                try {
+                    if (apiKey == null || apiKey.isEmpty() || apiKey.length() > 256) {
+                        throw new IOException("invalid API key");
+                    }
+                    for (int i = 0; i < apiKey.length(); i++) {
+                        if (apiKey.charAt(i) < 33 || apiKey.charAt(i) > 126) {
+                            throw new IOException("invalid API key character");
+                        }
+                    }
+                    byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+                    if (bytes.length > 131072) {
+                        throw new IOException("request too large");
+                    }
+                    String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + apiKey;
+                    connection = (HttpURLConnection) new URL(url).openConnection();
+                    connection.setRequestMethod("POST");
+                    connection.setInstanceFollowRedirects(false);
+                    connection.setConnectTimeout(30000);
+                    connection.setReadTimeout(60000);
+                    connection.setDoOutput(true);
+                    connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                    connection.setFixedLengthStreamingMode(bytes.length);
+                    try (OutputStream out = connection.getOutputStream()) { out.write(bytes); }
+                    status = connection.getResponseCode();
+                    InputStream response = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    if (response != null) {
+                        try (InputStream in = response) {
+                            byte[] buffer = new byte[8192];
+                            int count;
+                            while ((count = in.read(buffer)) != -1) {
+                                if (out.size() + count > 524288) throw new IOException("response too large");
+                                out.write(buffer, 0, count);
+                            }
+                        }
+                    }
+                    body = out.toString("UTF-8");
+                    ok = status >= 200 && status < 300;
+                } catch (Exception e) {
+                    status = 0;
+                    body = "{\"error\":{\"message\":\"" + String.valueOf(e.getMessage()).replace("\"", "'").replace("\\", "") + "\"}}";
+                } finally {
+                    if (connection != null) connection.disconnect();
+                }
+                final String b64 = Base64.encodeToString(body.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+                final int st = status;
+                final boolean success = ok;
+                runOnUiThread(() -> web.evaluateJavascript(
+                        "window.__geminiDone && window.__geminiDone(" + id + "," + success + "," + st + ",'" + b64 + "')", null));
+            }).start();
+        }
+
         /** Opens the system share sheet with plain text (used for data export). */
         @JavascriptInterface
         public void shareText(final String text) {
