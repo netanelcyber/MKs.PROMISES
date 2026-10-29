@@ -35,3 +35,8 @@ test('mrAttach adds evidence or background once and never changes status',()=>{
 test('getPage rejects outside the Android app',async()=>{
   await assert.rejects(ctx.getPage('https://www.makorrishon.co.il/?s=x'),/native-only/);
 });
+
+test('mrChoose and suggestStance exist and the page script parses',()=>{
+  const scripts=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
+  scripts.forEach(code=>new vm.Script(code));
+});

@@ -919,13 +919,34 @@ function mrImport(member){
   return getPage(searchUrl).then(function(html){
     var items=parseArticles(html);
     if(!items.length){toast('לא נמצאו כתבות עבור '+member.name);return}
+    return stanceReady().then(function(model){return model&&member.promises.length?suggestStance(model,items,member):null}).then(function(){return mrChoose(member,items)});
+  },function(e){
+    if(e&&e.message==='native-only'){
+      try{window.open(searchUrl,'_blank','noopener')}catch(x){}
+      toast('החיפוש האוטומטי זמין רק באפליקציית האנדרואיד. נפתח חיפוש באתר; העתיקו קישור דרך "+ ראיה"');
+    }else toast('החיפוש ב"מקור ראשון" נכשל: '+String((e&&e.message)||e).slice(0,120));
+  });
+}
+function suggestStance(model,items,member){
+  items.forEach(function(it){
+    var best=null;
+    member.promises.forEach(function(p){
+      var pr=stanceScore(model,p.text,it.title),k=0;for(var i=1;i<pr.length;i++)if(pr[i]>pr[k])k=i;
+      var label=model.labels[k];
+      if(label!=='context'&&pr[k]>=0.6&&(!best||pr[k]>best.c))best={c:pr[k],label:label,promise:p.text};
+    });
+    if(best)it.hint='הצעת מודל: '+STANCE_LABEL[best.label]+' '+Math.round(best.c*100)+'% · '+best.promise.slice(0,30);
+  });
+}
+function mrChoose(member,items){
+  {
     var targets=member.promises.map(function(p){return[p.id,'ראיה להבטחה: '+p.text.slice(0,60)]});
     targets.push(['bg','פעילות ציבורית קודמת']);
     var fields=[
       {k:'t',label:'לאן לשייך',type:'select',options:targets},
       {k:'effect',label:'השפעה (רק לראיה להבטחה; נקבעת על ידך)',type:'select',value:'context',options:[['context',EFFECT.context],['support',EFFECT.support],['contradict',EFFECT.contradict]]}
     ];
-    items.forEach(function(it,i){fields.push({k:'a'+i,label:it.title,type:'checkbox'})});
+    items.forEach(function(it,i){fields.push({k:'a'+i,label:it.title+(it.hint?' ['+it.hint+']':''),type:'checkbox'})});
     return ask('כתבות ב"מקור ראשון": '+member.name,fields,'ייבוא',{
       intro:'נשמרים כותרת וקישור בלבד, לא תוכן הכתבה. תוצאות החיפוש לא מאומתות: סמנו רק כתבות שבאמת עוסקות בחבר הכנסת.',
       validate:function(o){return items.some(function(it,i){return o['a'+i]})?'':'סמנו לפחות כתבה אחת'}
@@ -935,12 +956,133 @@ function mrImport(member){
       var n=mrAttach(member,o.t,o.effect,chosen);
       var saved=save();render();if(saved)toast(n?'נוספו '+n+' כתבות':'הכתבות כבר קיימות');
     });
-  },function(e){
-    if(e&&e.message==='native-only'){
-      try{window.open(searchUrl,'_blank','noopener')}catch(x){}
-      toast('החיפוש האוטומטי זמין רק באפליקציית האנדרואיד. נפתח חיפוש באתר; העתיקו קישור דרך "+ ראיה"');
-    }else toast('החיפוש ב"מקור ראשון" נכשל: '+String((e&&e.message)||e).slice(0,120));
+  }
+}
+
+/* ---------- stance model that runs on the device (hashed encoder + BiLSTM + DNN, exported by ml/export_js.py) ---------- */
+var CRC_TABLE=null;
+function crc32(str){
+  if(!CRC_TABLE){CRC_TABLE=new Int32Array(256);for(var n=0;n<256;n++){var c=n;for(var k=0;k<8;k++)c=c&1?(c>>>1)^0xedb88320:c>>>1;CRC_TABLE[n]=c}}
+  var bytes=new TextEncoder().encode(str),crc=-1;
+  for(var i=0;i<bytes.length;i++)crc=(crc>>>8)^CRC_TABLE[(crc^bytes[i])&255];
+  return(crc^-1)>>>0;
+}
+function f16(h){var s=h&0x8000?-1:1,e=(h>>10)&31,f=h&1023;return e===0?s*Math.pow(2,-14)*(f/1024):e===31?(f?NaN:s*Infinity):s*Math.pow(2,e-15)*(1+f/1024)}
+function decodeTensor(t){
+  var raw=atob(t.data),u=new Uint8Array(raw.length);for(var i=0;i<raw.length;i++)u[i]=raw.charCodeAt(i);
+  if(t.dtype==='f16'){var h=new Uint16Array(u.buffer),o=new Float32Array(h.length);for(var j=0;j<h.length;j++)o[j]=f16(h[j]);return o}
+  return new Float32Array(u.buffer);
+}
+function stanceLoad(json){
+  if(!json||json.format!=='mk-promises-stance-1'||!json.tensors||!json.cfg)throw new Error('קובץ מודל לא תקין');
+  var W={};Object.keys(json.tensors).forEach(function(k){W[k]=decodeTensor(json.tensors[k])});
+  return{cfg:json.cfg,labels:json.labels,synthetic:!!json.synthetic,W:W};
+}
+var STANCE_PREFIX='ובכלמהש';
+function stanceTokens(t){return String(t).toLowerCase().match(/[א-תA-Za-z0-9]+/g)||[]}
+function stanceFeats(tok,buckets,maxK){
+  var f=['w:'+tok];
+  for(var k=1;k<=2;k++){
+    if(tok.length-k>=2){var ok=true;for(var i=0;i<k;i++)if(STANCE_PREFIX.indexOf(tok.charAt(i))<0){ok=false;break}if(ok)f.push('p:'+tok.slice(k))}
+  }
+  var w='<'+tok+'>';for(var i2=0;i2<=w.length-3;i2++)f.push('c:'+w.slice(i2,i2+3));
+  return f.slice(0,maxK).map(function(x){return crc32(x)%(buckets-1)+1});
+}
+function sigmoid(x){return 1/(1+Math.exp(-x))}
+function erf(x){var s=x<0?-1:1;x=Math.abs(x);var t=1/(1+0.3275911*x);return s*(1-(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-0.284496736)*t+0.254829592)*t*Math.exp(-x*x))}
+function gelu(x){return 0.5*x*(1+erf(x/Math.SQRT2))}
+function linear(W,name,x){
+  var w=W[name+'.weight'],b=W[name+'.bias'],n=b.length,d=x.length,o=new Float32Array(n);
+  for(var i=0;i<n;i++){var s=b[i],r=i*d;for(var j=0;j<d;j++)s+=w[r+j]*x[j];o[i]=s}
+  return o;
+}
+function layerNorm(W,name,x){
+  var g=W[name+'.weight'],b=W[name+'.bias'],n=x.length,m=0,v=0,i;
+  for(i=0;i<n;i++)m+=x[i];m/=n;for(i=0;i<n;i++)v+=(x[i]-m)*(x[i]-m);v/=n;
+  var o=new Float32Array(n);for(i=0;i<n;i++)o[i]=(x[i]-m)/Math.sqrt(v+1e-5)*g[i]+b[i];return o;
+}
+function lstmDir(W,layer,rev,seq,H){
+  var sfx='_l'+layer+(rev?'_reverse':''),wi=W['lstm.weight_ih'+sfx],wh=W['lstm.weight_hh'+sfx],bi=W['lstm.bias_ih'+sfx],bh=W['lstm.bias_hh'+sfx];
+  var T=seq.length,D=seq[0].length,h=new Float32Array(H),c=new Float32Array(H),out=new Array(T),g=new Float32Array(4*H);
+  for(var step=0;step<T;step++){
+    var t=rev?T-1-step:step,x=seq[t];
+    for(var r=0;r<4*H;r++){
+      var s=bi[r]+bh[r],ri=r*D,rh=r*H,j;
+      for(j=0;j<D;j++)s+=wi[ri+j]*x[j];
+      for(j=0;j<H;j++)s+=wh[rh+j]*h[j];
+      g[r]=s;
+    }
+    var nh=new Float32Array(H);
+    for(var u=0;u<H;u++){
+      var ig=sigmoid(g[u]),fg=sigmoid(g[H+u]),gg=Math.tanh(g[2*H+u]),og=sigmoid(g[3*H+u]);
+      c[u]=fg*c[u]+ig*gg;nh[u]=og*Math.tanh(c[u]);
+    }
+    h=nh;out[t]=nh;
+  }
+  return out;
+}
+function stanceScore(model,promise,utterance){
+  var cfg=model.cfg,W=model.W,dim=cfg.dim,H=cfg.lstm_hidden;
+  var p=stanceTokens(promise).slice(0,40),u=stanceTokens(utterance).slice(0,160);
+  var toks=p.concat(['[sep]'],u),seg=[],i,j;
+  for(i=0;i<p.length+1;i++)seg.push(0);for(i=0;i<u.length;i++)seg.push(1);
+  var emb=W['enc.emb.weight'],sg=W['enc.seg.weight'];
+  var seq=toks.map(function(t,ti){
+    var ids=stanceFeats(t,cfg.buckets,14),x=new Float32Array(dim);
+    for(var a=0;a<ids.length;a++){var row=ids[a]*dim;for(var d=0;d<dim;d++)x[d]+=emb[row+d]}
+    for(var d2=0;d2<dim;d2++)x[d2]=x[d2]/ids.length+sg[seg[ti]*dim+d2];
+    return x;
   });
+  for(var layer=0;layer<cfg.lstm_layers;layer++){
+    var f=lstmDir(W,layer,false,seq,H),b=lstmDir(W,layer,true,seq,H);
+    seq=f.map(function(v,t){var o=new Float32Array(2*H);o.set(v);o.set(b[t],H);return o});
+  }
+  var T=seq.length,a=new Float32Array(T),mx=-Infinity,aw=W['att.weight'],ab=W['att.bias'][0];
+  for(i=0;i<T;i++){var sc=ab;for(j=0;j<2*H;j++)sc+=aw[j]*seq[i][j];a[i]=sc;if(sc>mx)mx=sc}
+  var z=0;for(i=0;i<T;i++){a[i]=Math.exp(a[i]-mx);z+=a[i]}
+  var att=new Float32Array(2*H),mp=new Float32Array(2*H).fill(-Infinity);
+  for(i=0;i<T;i++)for(j=0;j<2*H;j++){att[j]+=a[i]/z*seq[i][j];if(seq[i][j]>mp[j])mp[j]=seq[i][j]}
+  var x2=new Float32Array(4*H);x2.set(att);x2.set(mp,2*H);
+  for(i=0;i<cfg.dnn.length;i++){
+    x2=linear(W,'head.'+(4*i),x2);for(j=0;j<x2.length;j++)x2[j]=gelu(x2[j]);x2=layerNorm(W,'head.'+(4*i+2),x2);
+  }
+  var lg=linear(W,'head.'+(4*cfg.dnn.length),x2),m=Math.max.apply(null,lg),e=Array.prototype.map.call(lg,function(v){return Math.exp(v-m)}),s=e.reduce(function(p2,q){return p2+q},0);
+  return e.map(function(v){return v/s});
+}
+
+var STANCE=null,STANCE_DB='mk-promises-model',STANCE_LABEL={support:'תומך',contradict:'סותר',context:'הקשר'};
+function idb(mode,fn){
+  return new Promise(function(res,rej){
+    try{
+      var open=indexedDB.open(STANCE_DB,1);
+      open.onupgradeneeded=function(){open.result.createObjectStore('m')};
+      open.onerror=function(){rej(open.error)};
+      open.onsuccess=function(){var tx=open.result.transaction('m',mode),req=fn(tx.objectStore('m'));tx.oncomplete=function(){res(req&&req.result)};tx.onerror=function(){rej(tx.error)}};
+    }catch(e){rej(e)}
+  });
+}
+function stanceReady(){
+  if(STANCE)return Promise.resolve(STANCE);
+  return idb('readonly',function(st){return st.get('model')}).then(function(text){
+    if(!text)return null;
+    try{STANCE=stanceLoad(JSON.parse(text))}catch(e){return null}
+    return STANCE;
+  },function(){return null});
+}
+function stanceFromText(text){
+  var model=stanceLoad(JSON.parse(text));STANCE=model;
+  return idb('readwrite',function(st){return st.put(text,'model')}).catch(function(){}).then(function(){return model});
+}
+function stancePick(){
+  var input=document.createElement('input');input.type='file';input.accept='.json,application/json';
+  input.onchange=function(){
+    var f=input.files&&input.files[0];if(!f)return;
+    var r=new FileReader();
+    r.onload=function(){stanceFromText(String(r.result)).then(function(m){toast('המודל נטען'+(m.synthetic?' (אומן על נתונים סינתטיים בלבד)':''))},function(e){toast('טעינת המודל נכשלה: '+String((e&&e.message)||e).slice(0,100))})};
+    r.onerror=function(){toast('קריאת הקובץ נכשלה')};
+    r.readAsText(f);
+  };
+  input.click();
 }
 
 /* ---------- views ---------- */
@@ -1000,7 +1142,7 @@ function renderMk(m){
     (p.evidence||[]).forEach(function(e){
       h+='<div class="ev '+esc(e.effect)+'"><div>'+esc(e.title)+'</div>'+(e.excerpt?'<blockquote class="protocol-quote">'+esc(e.excerpt)+'</blockquote>':'')+(e.protocol?'<div class="mute">'+esc(e.protocol.committee||'פרוטוקול ועדה')+(e.protocol.date?' · '+esc(e.protocol.date):'')+'</div>':'')+'<div class="mute">'+esc(e.type)+' · '+esc(EFFECT[e.effect]||'')+(e.date?' · '+esc(e.date):'')+' · '+link(e.url)+' <button class="lnk danger" data-a="delEv" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'" data-e="'+esc(e.id)+'">מחיקה</button></div></div>'});
     h+='<div class="row" style="margin-top:8px"><button class="sec" data-a="addEv" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">+ ראיה</button><button class="lnk" data-a="editPromise" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">עריכה</button><button class="lnk danger" data-a="delPromise" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">מחיקה</button></div></div>'});
-  h+='<div class="row"><h2 class="grow">פעילות ציבורית קודמת</h2><button class="sec" data-a="addBg" data-id="'+esc(m.id)+'">+ פריט</button><button class="sec" data-a="mrImport" data-id="'+esc(m.id)+'">ייבוא ממקור ראשון</button></div>';
+  h+='<div class="row"><h2 class="grow">פעילות ציבורית קודמת</h2><button class="sec" data-a="addBg" data-id="'+esc(m.id)+'">+ פריט</button><button class="sec" data-a="mrImport" data-id="'+esc(m.id)+'">ייבוא ממקור ראשון</button><button class="sec" data-a="loadModel">טעינת מודל</button></div>';
   h+='<p class="mute">תפקידים, פרסומים והצהרות פומביות שאפשר לקשר למקור. בלי פרטים פרטיים.</p>';
   m.background.forEach(function(b){
     h+='<div class="card"><div>'+esc(b.title)+'</div><div class="mute">'+(b.period?esc(b.period)+' · ':'')+link(b.url)+'</div>'+(b.note?'<div class="mute">'+esc(b.note)+'</div>':'')
@@ -1033,6 +1175,7 @@ var A={
   delPromise:function(d){var m=mk(d.id);confirmAction('למחוק את ההבטחה?').then(function(yes){if(!yes)return;m.promises=m.promises.filter(function(p){return p.id!==d.p});save();render()})},
   addEv:function(d){evForm(mk(d.id),d.p)},
   delEv:function(d){var p=mk(d.id).promises.find(function(x){return x.id===d.p});p.evidence=p.evidence.filter(function(e){return e.id!==d.e});save();render()},
+  loadModel:function(){stancePick()},
   mrImport:function(d){var m=mk(d.id);if(m)mrImport(m)},
   addBg:function(d){var m=mk(d.id);ask('פעילות ציבורית קודמת',[{k:'title',label:'תיאור (תפקיד / פרסום / הצהרה)',required:true},{k:'period',label:'תקופה'},{k:'url',label:'קישור למקור',type:'url',required:true},{k:'note',label:'הערה',type:'textarea'}]).then(function(o){if(!o)return;o.id=uid();m.background.push(o);save();render()})},
   delBg:function(d){var m=mk(d.id);m.background=m.background.filter(function(b){return b.id!==d.b});save();render()},

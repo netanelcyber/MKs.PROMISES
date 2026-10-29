@@ -9,6 +9,8 @@ import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
 import android.webkit.WebViewClient;
 
 import java.io.ByteArrayOutputStream;
@@ -30,6 +32,8 @@ public class MainActivity extends Activity {
 
     private WebView web;
     private BillsLoader bills;
+    private ValueCallback<Uri[]> fileCallback;
+    private static final int PICK_FILE = 4711;
 
     /**
      * Quotes a string as a JavaScript string literal that is also safe inside an inline script.
@@ -85,7 +89,35 @@ public class MainActivity extends Activity {
                 return false;
             }
         });
+        // <input type="file"> support, used to load a model file exported by ml/export_js.py.
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
+                if (fileCallback != null) {
+                    fileCallback.onReceiveValue(null);
+                }
+                fileCallback = callback;
+                try {
+                    startActivityForResult(params.createIntent(), PICK_FILE);
+                } catch (Exception e) {
+                    fileCallback = null;
+                    callback.onReceiveValue(null);
+                    return false;
+                }
+                return true;
+            }
+        });
         web.loadUrl("file:///android_asset/index.html");
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == PICK_FILE && fileCallback != null) {
+            fileCallback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data));
+            fileCallback = null;
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
     }
 
     @Override
