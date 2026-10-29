@@ -80,8 +80,26 @@ def queries_from_backup(path):
     return [m["name"] for m in s.get("mks", []) if m.get("name")]
 
 
+def score_titles(checkpoint, items, promises):
+    """Suggest support/contradict/context for each (title, promise) with the trained LSTM/DNN/LLM stance model.
+    Titles are short and the model was trained on protocol utterances, so treat this as a weak hint only."""
+    from model import LABELS, load_checkpoint   # needs torch; imported lazily
+    import torch
+    model, coll, _ = load_checkpoint(checkpoint)
+    for it in items:
+        it["suggestions"] = []
+        for pr in promises:
+            batch = coll([{"promise": pr["text"], "utterance": it["title"]}])
+            batch.pop("y")
+            with torch.no_grad():
+                pr_ = torch.softmax(model(batch), -1)[0].tolist()
+            k = max(range(len(LABELS)), key=lambda j: pr_[j])
+            it["suggestions"].append({"promise": pr["id"], "label": LABELS[k], "confidence": round(pr_[k], 3)})
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--checkpoint", help="trained model.pt (from train.py): adds suggested labels per promise; needs --backup")
     ap.add_argument("--query", action="append", default=[])
     ap.add_argument("--backup", help="app backup JSON; searches every member name in it")
     ap.add_argument("--site", default=SITE)
@@ -89,6 +107,10 @@ def main():
     ap.add_argument("--out", default="articles.jsonl")
     ap.add_argument("--delay", type=float, default=3.0)
     a = ap.parse_args()
+    promises_by_name = {}
+    if a.backup:
+        for m in json.load(open(a.backup, encoding="utf-8")).get("mks", []):
+            promises_by_name[m.get("name")] = [{"id": p.get("id"), "text": p.get("text", "")} for p in m.get("promises", []) if p.get("text")]
     qs = a.query + (queries_from_backup(a.backup) if a.backup else [])
     if not qs:
         ap.error("give --query or --backup")
@@ -113,6 +135,8 @@ def main():
                 print(f"{q}: failed ({e})")
                 continue
             items = parse(html, a.site)
+            if a.checkpoint and promises_by_name.get(q):
+                score_titles(a.checkpoint, items, promises_by_name[q])
             for it in items:
                 f.write(json.dumps({"query": q, **it}, ensure_ascii=False) + "\n")
             total += len(items)

@@ -863,6 +863,86 @@ function assignEvidence(options,title,type,url){
   });
 }
 
+/* ---------- articles from Makor Rishon (metadata only: title + link; never the article text) ---------- */
+var MR_HOST=/^(www\.)?makorrishon\.co\.il$/i;
+function mrSearchUrl(name){return'https://www.makorrishon.co.il/?s='+encodeURIComponent(name)}
+function mrDecode(t){
+  return String(t).replace(/<[^>]*>/g,' ').replace(/&(#x?[0-9a-f]+|amp|lt|gt|quot|apos|nbsp);/gi,function(all,e){
+    var l=e.toLowerCase();
+    if(l==='amp')return'&';if(l==='lt')return'<';if(l==='gt')return'>';if(l==='quot')return'"';if(l==='apos')return"'";if(l==='nbsp')return' ';
+    var n=l.charAt(1)==='x'?parseInt(l.slice(2),16):parseInt(l.slice(1),10);
+    return n>31&&n<0x10ffff&&!(n>=0xd800&&n<=0xdfff)?String.fromCodePoint(n):' ';
+  }).replace(/\s+/g,' ').trim();
+}
+function parseArticles(html,base){
+  base=base||'https://www.makorrishon.co.il/';
+  var out=[],seen={},re=/<a\s[^>]*?href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,m;
+  while((m=re.exec(String(html)))&&out.length<30){
+    var u;try{u=new URL(mrDecode(m[1]),base)}catch(e){continue}
+    if(u.protocol!=='https:'||!MR_HOST.test(u.hostname))continue;
+    u.hash='';u.search='';
+    var path=u.pathname.replace(/\/+$/,'');
+    if(!/^\/[^\/]+\/.+/.test(path)||/^\/(tag|category|author|page|feed|wp-)/i.test(path))continue;
+    var title=mrDecode(m[2]);
+    if(title.length<12||title.length>200)continue;
+    var url=u.href;if(seen[url])continue;seen[url]=1;
+    out.push({title:title,url:url});
+  }
+  return out;
+}
+function getPage(url){
+  return new Promise(function(res,rej){
+    if(!(window.Android&&window.Android.httpGetPage)){rej(new Error('native-only'));return}
+    var id=++nid,timer=setTimeout(function(){delete pending[id];rej(new Error('זמן ההמתנה לאתר הסתיים'))},NETWORK_TIMEOUT);
+    pending[id]={url:url,res:function(t){clearTimeout(timer);delete pending[id];res(t)},rej:function(e){clearTimeout(timer);delete pending[id];rej(e)}};
+    try{window.Android.httpGetPage(id,url)}catch(e){clearTimeout(timer);delete pending[id];rej(new Error('החיבור לאתר נכשל'))}
+  });
+}
+function mrAttach(member,target,effect,items){
+  var added=0;
+  items.forEach(function(it){
+    if(target==='bg'){
+      if(member.background.some(function(b){return b.url===it.url}))return;
+      member.background.push({id:uid(),title:it.title,period:'',url:it.url,note:'מקור ראשון'});added++;
+    }else{
+      var p=member.promises.find(function(x){return x.id===target});if(!p)return;
+      p.evidence=p.evidence||[];
+      if(p.evidence.some(function(e){return e.url===it.url}))return;
+      p.evidence.push({id:uid(),title:it.title,type:'כתבה',effect:effect,date:'',url:it.url});added++;
+    }
+  });
+  return added;
+}
+function mrImport(member){
+  var searchUrl=mrSearchUrl(member.name);
+  toast('מחפש ב"מקור ראשון"…');
+  return getPage(searchUrl).then(function(html){
+    var items=parseArticles(html);
+    if(!items.length){toast('לא נמצאו כתבות עבור '+member.name);return}
+    var targets=member.promises.map(function(p){return[p.id,'ראיה להבטחה: '+p.text.slice(0,60)]});
+    targets.push(['bg','פעילות ציבורית קודמת']);
+    var fields=[
+      {k:'t',label:'לאן לשייך',type:'select',options:targets},
+      {k:'effect',label:'השפעה (רק לראיה להבטחה; נקבעת על ידך)',type:'select',value:'context',options:[['context',EFFECT.context],['support',EFFECT.support],['contradict',EFFECT.contradict]]}
+    ];
+    items.forEach(function(it,i){fields.push({k:'a'+i,label:it.title,type:'checkbox'})});
+    return ask('כתבות ב"מקור ראשון": '+member.name,fields,'ייבוא',{
+      intro:'נשמרים כותרת וקישור בלבד, לא תוכן הכתבה. תוצאות החיפוש לא מאומתות: סמנו רק כתבות שבאמת עוסקות בחבר הכנסת.',
+      validate:function(o){return items.some(function(it,i){return o['a'+i]})?'':'סמנו לפחות כתבה אחת'}
+    }).then(function(o){
+      if(!o||S.mks.indexOf(member)<0)return;
+      var chosen=items.filter(function(it,i){return o['a'+i]});
+      var n=mrAttach(member,o.t,o.effect,chosen);
+      var saved=save();render();if(saved)toast(n?'נוספו '+n+' כתבות':'הכתבות כבר קיימות');
+    });
+  },function(e){
+    if(e&&e.message==='native-only'){
+      try{window.open(searchUrl,'_blank','noopener')}catch(x){}
+      toast('החיפוש האוטומטי זמין רק באפליקציית האנדרואיד. נפתח חיפוש באתר; העתיקו קישור דרך "+ ראיה"');
+    }else toast('החיפוש ב"מקור ראשון" נכשל: '+String((e&&e.message)||e).slice(0,120));
+  });
+}
+
 /* ---------- views ---------- */
 function chip(st){var s=STATUS[st]||STATUS.unchecked;return'<span class="chip '+s[1]+'">'+esc(s[0])+'</span>'}
 function counts(m){var c={};m.promises.forEach(function(p){c[p.status]=(c[p.status]||0)+1});
@@ -920,7 +1000,7 @@ function renderMk(m){
     (p.evidence||[]).forEach(function(e){
       h+='<div class="ev '+esc(e.effect)+'"><div>'+esc(e.title)+'</div>'+(e.excerpt?'<blockquote class="protocol-quote">'+esc(e.excerpt)+'</blockquote>':'')+(e.protocol?'<div class="mute">'+esc(e.protocol.committee||'פרוטוקול ועדה')+(e.protocol.date?' · '+esc(e.protocol.date):'')+'</div>':'')+'<div class="mute">'+esc(e.type)+' · '+esc(EFFECT[e.effect]||'')+(e.date?' · '+esc(e.date):'')+' · '+link(e.url)+' <button class="lnk danger" data-a="delEv" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'" data-e="'+esc(e.id)+'">מחיקה</button></div></div>'});
     h+='<div class="row" style="margin-top:8px"><button class="sec" data-a="addEv" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">+ ראיה</button><button class="lnk" data-a="editPromise" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">עריכה</button><button class="lnk danger" data-a="delPromise" data-id="'+esc(m.id)+'" data-p="'+esc(p.id)+'">מחיקה</button></div></div>'});
-  h+='<div class="row"><h2 class="grow">פעילות ציבורית קודמת</h2><button class="sec" data-a="addBg" data-id="'+esc(m.id)+'">+ פריט</button></div>';
+  h+='<div class="row"><h2 class="grow">פעילות ציבורית קודמת</h2><button class="sec" data-a="addBg" data-id="'+esc(m.id)+'">+ פריט</button><button class="sec" data-a="mrImport" data-id="'+esc(m.id)+'">ייבוא ממקור ראשון</button></div>';
   h+='<p class="mute">תפקידים, פרסומים והצהרות פומביות שאפשר לקשר למקור. בלי פרטים פרטיים.</p>';
   m.background.forEach(function(b){
     h+='<div class="card"><div>'+esc(b.title)+'</div><div class="mute">'+(b.period?esc(b.period)+' · ':'')+link(b.url)+'</div>'+(b.note?'<div class="mute">'+esc(b.note)+'</div>':'')
@@ -953,6 +1033,7 @@ var A={
   delPromise:function(d){var m=mk(d.id);confirmAction('למחוק את ההבטחה?').then(function(yes){if(!yes)return;m.promises=m.promises.filter(function(p){return p.id!==d.p});save();render()})},
   addEv:function(d){evForm(mk(d.id),d.p)},
   delEv:function(d){var p=mk(d.id).promises.find(function(x){return x.id===d.p});p.evidence=p.evidence.filter(function(e){return e.id!==d.e});save();render()},
+  mrImport:function(d){var m=mk(d.id);if(m)mrImport(m)},
   addBg:function(d){var m=mk(d.id);ask('פעילות ציבורית קודמת',[{k:'title',label:'תיאור (תפקיד / פרסום / הצהרה)',required:true},{k:'period',label:'תקופה'},{k:'url',label:'קישור למקור',type:'url',required:true},{k:'note',label:'הערה',type:'textarea'}]).then(function(o){if(!o)return;o.id=uid();m.background.push(o);save();render()})},
   delBg:function(d){var m=mk(d.id);m.background=m.background.filter(function(b){return b.id!==d.b});save();render()},
   loadBills:function(d){clearApiFailure('bills',d.id);loadBills(mk(d.id))},
