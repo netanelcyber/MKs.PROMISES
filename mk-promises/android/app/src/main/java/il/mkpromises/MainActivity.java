@@ -17,6 +17,7 @@ import android.widget.TextView;
 import org.json.JSONObject;
 
 import java.util.ArrayDeque;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
@@ -181,9 +182,56 @@ public class MainActivity extends Activity {
         startActivityForResult(i, PICK_FILE);
     }
 
+    private File copyDest;
+    private Callback<String> copyCallback;
+    private static final int PICK_COPY = 4712;
+
+    /** Let the user pick a large file (an LLM model) and stream it into dest without loading it into memory. */
+    void pickCopy(File dest, Callback<String> done) {
+        copyDest = dest;
+        copyCallback = done;
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        startActivityForResult(i, PICK_COPY);
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == PICK_COPY && copyCallback != null) {
+            final File dest = copyDest;
+            final Callback<String> cb = copyCallback;
+            copyDest = null;
+            copyCallback = null;
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+                return;
+            }
+            final android.net.Uri uri = data.getData();
+            Ui.toast(this, "מעתיק את המודל למכשיר…");
+            background(() -> {
+                dest.getParentFile().mkdirs();
+                File tmp = new File(dest.getPath() + ".part");
+                java.io.InputStream in = getContentResolver().openInputStream(uri);
+                if (in == null) {
+                    throw new java.io.IOException("לא ניתן לקרוא את הקובץ");
+                }
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(tmp)) {
+                    byte[] buf = new byte[1 << 20];
+                    int n;
+                    while ((n = in.read(buf)) > 0) {
+                        out.write(buf, 0, n);
+                    }
+                } finally {
+                    in.close();
+                }
+                if (!tmp.renameTo(dest)) {
+                    throw new java.io.IOException("השמירה נכשלה");
+                }
+                return dest.getPath();
+            }, cb::run);
+            return;
+        }
         if (requestCode != PICK_FILE || pickCallback == null) {
             return;
         }

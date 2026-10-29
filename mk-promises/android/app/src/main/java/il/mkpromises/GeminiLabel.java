@@ -25,7 +25,7 @@ import java.util.Map;
 final class GeminiLabel {
 
     private static final String HOST = "generativelanguage.googleapis.com";
-    private static final String FILE = "gemini-labels.json";
+    static final String FILE = "gemini-labels.json";
     private static final int BATCH = 10;
     /** Gemini labels only this many pairs; after that the local model continues alone. */
     static final int FIRST_STEP = 20;

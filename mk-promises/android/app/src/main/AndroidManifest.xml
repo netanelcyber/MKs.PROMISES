@@ -5,6 +5,7 @@
 
     <application
         android:allowBackup="true"
+        android:largeHeap="true"
         android:label="מעקב הבטחות"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"

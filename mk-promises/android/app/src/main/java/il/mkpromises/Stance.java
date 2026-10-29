@@ -703,6 +703,10 @@ final class Stance {
         int valSize;
     }
 
+    /** Light-model sizes {buckets, dim, hidden}: about 0.13M, 1.1M and 8.5M parameters. Nowhere near a billion. */
+    static final int[][] SIZES = {{4096, 32, 48}, {16384, 64, 96}, {65536, 128, 192}};
+    static volatile int sizeLevel = 0;
+
     static Model init(int buckets, int dim, int hidden, long seed) {
         Random rng = new Random(seed);
         Model m = new Model();
@@ -796,7 +800,8 @@ final class Stance {
         List<Row> tr = new ArrayList<>();
         List<Row> val = new ArrayList<>();
         split(rows, tr, val);
-        Model model = init(4096, 32, 48, seed);
+        int[] sz = SIZES[Math.max(0, Math.min(SIZES.length - 1, sizeLevel))];
+        Model model = init(sz[0], sz[1], sz[2], seed);
         Random rng = new Random(seed + 7);
         int[] counts = new int[3];
         for (Row r : tr) {

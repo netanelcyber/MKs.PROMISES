@@ -23,11 +23,17 @@ final class ModelScreen {
                     + Math.round(mt.optDouble("macroF1") * 100) + "% על " + mt.optInt("valSize") + " דוגמאות");
         }
         List<Ui.Field> f = new ArrayList<>();
-        f.add(new Ui.Field("act", "פעולה", Ui.SELECT).option("gemini", "תיוג עם Gemini ואימון").option("auto", "אימון אוטומטי על כל הצעות החוק (תיוג חלש)").option("train", "אימון מודל על המכשיר מהתיוגים שלי")
+        f.add(new Ui.Field("act", "פעולה", Ui.SELECT).option("local", "תיוג עם מודל שפה מקומי (~1B) ואימון").option("gemini", "תיוג עם Gemini ואימון").option("auto", "אימון אוטומטי על כל הצעות החוק (תיוג חלש)").option("train", "אימון מודל על המכשיר מהתיוגים שלי")
                 .option("b2", "מודל מובנה: 2 שכבות LSTM").option("b4", "מודל מובנה: 4 שכבות LSTM")
                 .option("b8", "מודל מובנה: 8 שכבות LSTM").option("load", "טעינת קובץ מודל").option("clear", "הסרת המודל שלי (חוזר למובנה)"));
+        f.add(new Ui.Field("size", "גודל המודל שיאומן במכשיר", Ui.SELECT).option("0", "קטן (~0.13M פרמטרים)")
+                .option("1", "בינוני (~1.1M)").option("2", "גדול (~8.5M, דורש זיכרון וזמן)"));
         Ui.form(app, "מודל הצעות", status + "\nההצעות אינן משנות סטטוס ואינן נבחרות אוטומטית.", f, "המשך", v -> {
+            Stance.sizeLevel = Integer.parseInt(v.get("size"));
             switch (v.get("act")) {
+                case "local":
+                    LocalLlm.start(app);
+                    break;
                 case "gemini":
                     GeminiLabel.start(app);
                     break;

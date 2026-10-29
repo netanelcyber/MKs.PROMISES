@@ -26,3 +26,8 @@ android {
     }
 
 }
+
+dependencies {
+    // On-device LLM runtime (runs a model file the user provides; nothing is sent to the cloud)
+    implementation 'com.google.mediapipe:tasks-genai:0.10.14'
+}
