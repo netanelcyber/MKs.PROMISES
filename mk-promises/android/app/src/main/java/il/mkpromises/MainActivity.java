@@ -33,6 +33,7 @@ public class MainActivity extends Activity {
     private InitiatorsLoader initiators;
     private LawsLoader laws;
     private VotesLoader votes;
+    private GeminiTagStore geminiTags;
 
     /**
      * Quotes a string as a JavaScript string literal that is also safe inside an inline script.
@@ -89,6 +90,8 @@ public class MainActivity extends Activity {
         votes = new VotesLoader(new File(getFilesDir(), "votes"), KNESSET_ODATA, (state, skip, msg) ->
                 runOnUiThread(() -> web.evaluateJavascript(
                         "window.__votesNative&&window.__votesNative(" + jsq(state) + "," + skip + "," + jsq(msg) + ")", null)));
+
+        geminiTags = new GeminiTagStore(new File(getFilesDir(), "gemini-tags"));
 
         web.addJavascriptInterface(new Bridge(), "Android");
         web.setWebViewClient(new WebViewClient() {
@@ -353,6 +356,23 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void wipeVotes() {
             votes.wipe();
+        }
+
+        /** Returns the full Gemini tags JSON object, or "{}". */
+        @JavascriptInterface
+        public String geminiTagsRead() {
+            return geminiTags.readAll();
+        }
+
+        /** Overwrites the entire Gemini tags store with the given JSON string. */
+        @JavascriptInterface
+        public void geminiTagsSave(String json) {
+            geminiTags.writeAll(json);
+        }
+
+        @JavascriptInterface
+        public void geminiTagsWipe() {
+            geminiTags.wipe();
         }
 
         /**

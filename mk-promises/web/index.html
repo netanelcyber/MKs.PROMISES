@@ -1241,8 +1241,19 @@ function renderVoteItems(){
 /* ---------- Gemini auto-tag ---------- */
 function geminiKey(){try{return localStorage.getItem(GEMINI_KEY_STORE)||''}catch(e){return''}}
 function geminiSaveKey(k){try{localStorage.setItem(GEMINI_KEY_STORE,k)}catch(e){}}
-function loadGeminiTags(){if(geminiTags)return geminiTags;try{geminiTags=JSON.parse(localStorage.getItem(GEMINI_TAGS_STORE)||'{}');if(!geminiTags||typeof geminiTags!=='object'||Array.isArray(geminiTags))geminiTags={}}catch(e){geminiTags={}}return geminiTags}
-function saveGeminiTags(){try{localStorage.setItem(GEMINI_TAGS_STORE,JSON.stringify(loadGeminiTags()))}catch(e){}}
+function isNativeGeminiTags(){return!!(window.Android&&window.Android.geminiTagsRead)}
+function loadGeminiTags(){
+  if(geminiTags)return geminiTags;
+  if(isNativeGeminiTags()){try{geminiTags=JSON.parse(window.Android.geminiTagsRead()||'{}')}catch(e){geminiTags={}}}
+  else{try{geminiTags=JSON.parse(localStorage.getItem(GEMINI_TAGS_STORE)||'{}')}catch(e){geminiTags={}}}
+  if(!geminiTags||typeof geminiTags!=='object'||Array.isArray(geminiTags))geminiTags={};
+  return geminiTags;
+}
+function saveGeminiTags(){
+  var json=JSON.stringify(loadGeminiTags());
+  if(isNativeGeminiTags()){try{window.Android.geminiTagsSave(json)}catch(e){}}
+  else{try{localStorage.setItem(GEMINI_TAGS_STORE,json)}catch(e){}}
+}
 function billTag(billId){var t=loadGeminiTags();return t[billId]||''}
 function setBillTag(billId,topic){loadGeminiTags()[billId]=topic}
 function isNativeGemini(){return!!(window.Android&&window.Android.httpGemini)}
@@ -1350,6 +1361,7 @@ function wipeCaches(){
   try{localStorage.removeItem(IKEY)}catch(e){}
   try{localStorage.removeItem(LKEY)}catch(e){}
   try{localStorage.removeItem(VKEY)}catch(e){}
+  try{if(window.Android&&window.Android.geminiTagsWipe)window.Android.geminiTagsWipe()}catch(e){}
   try{localStorage.removeItem(GEMINI_TAGS_STORE)}catch(e){}
   try{localStorage.removeItem(CMT_KEY)}catch(e){}
   try{if(window.Android&&window.Android.wipeBills)window.Android.wipeBills()}catch(e){}

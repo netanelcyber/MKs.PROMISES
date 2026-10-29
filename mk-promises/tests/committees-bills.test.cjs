@@ -386,6 +386,11 @@ function androidVotes(){
   return {calls,pages,setMeta(value){meta=value},setRunning(value){running=value},api:{
     startVotes(knesset,fresh){calls.start.push([knesset,fresh]);return !running},stopVotes(){calls.stop++},votesMeta(){return meta},votesPage(skip){return pages[skip]||''},wipeVotes(){calls.wipe++}}};
 }
+function androidGeminiTags(){
+  const calls={wipe:0,saves:[]};let data='{}';
+  return {calls,setData(value){data=value},api:{
+    geminiTagsRead(){return data},geminiTagsSave(json){calls.saves.push(json);data=json},geminiTagsWipe(){calls.wipe++;data='{}'}}};
+}
 const voteRow=(id,knesset,title,subject)=>({Id:id,KnessetNum:knesset,VoteDateTime:'2024-03-15T14:00:00',VoteTitle:title||'הצבעה '+id,VoteSubject:subject||'נושא '+id,VoteMethodDesc:'הרמת יד',VoteStatusDesc:'אושרה',ForOptionDesc:'בעד',AgainstOptionDesc:'נגד',IsNoConfidenceInGov:false});
 const vtPage=(from,count)=>JSON.stringify({value:Array.from({length:count},(_,i)=>voteRow(from+i,25))});
 
@@ -433,10 +438,10 @@ test('votes compact storage preserves key fields from the OData response',async(
 /* ---------- wipe and navigation ---------- */
 
 test('wiping all data also clears the local bills and committee caches, including Java storage',async()=>{
-  const nb=androidBills();const ni=androidInitiators();const nl=androidLaws();const nv=androidVotes();
-  const h=app({android:{...nb.api,...ni.api,...nl.api,...nv.api,shareText(t){}},storage:{[CMT_KEY]:{win:{from:'2026-04-27',to:'2026-10-27'},committees:[],sessions:[],roles:[]},[BKEY]:{knesset:25,rows:[],nextSkip:0,done:false,loadedAt:''}}});
+  const nb=androidBills();const ni=androidInitiators();const nl=androidLaws();const nv=androidVotes();const ng=androidGeminiTags();
+  const h=app({android:{...nb.api,...ni.api,...nl.api,...nv.api,...ng.api,shareText(t){}},storage:{[CMT_KEY]:{win:{from:'2026-04-27',to:'2026-10-27'},committees:[],sessions:[],roles:[]},[BKEY]:{knesset:25,rows:[],nextSkip:0,done:false,loadedAt:''}}});
   h.click('menu');h.submit({act:'wipe'});await h.flush();h.submit({});await h.flush();
-  assert.deepEqual(h.record(),{v:1,mks:[]});assert.equal(h.storage.has(CMT_KEY),false);assert.equal(h.storage.has(BKEY),false);assert.equal(h.storage.has(IKEY),false);assert.equal(h.storage.has(LKEY),false);assert.equal(h.storage.has(VKEY),false);assert.equal(h.storage.has(GTKEY),false);assert.equal(nb.calls.wipe,1);assert.equal(ni.calls.wipe,1);assert.equal(nl.calls.wipe,1);assert.equal(nv.calls.wipe,1);
+  assert.deepEqual(h.record(),{v:1,mks:[]});assert.equal(h.storage.has(CMT_KEY),false);assert.equal(h.storage.has(BKEY),false);assert.equal(h.storage.has(IKEY),false);assert.equal(h.storage.has(LKEY),false);assert.equal(h.storage.has(VKEY),false);assert.equal(h.storage.has(GTKEY),false);assert.equal(nb.calls.wipe,1);assert.equal(ni.calls.wipe,1);assert.equal(nl.calls.wipe,1);assert.equal(nv.calls.wipe,1);assert.equal(ng.calls.wipe,1);
   assert.equal(h.hooks.cm(),null);assert.equal(h.hooks.bl(),null);assert.equal(h.hooks.ini(),null);assert.equal(h.hooks.lw(),null);assert.equal(h.hooks.vt(),null);
 });
 
@@ -477,13 +482,15 @@ test('Gemini tagging calls the API with bill names and stores topic tags',async(
   assert.ok(taggedCount>=20);
 });
 
-test('Gemini native bridge decodes the response and resolves the promise',async()=>{
+test('Gemini native bridge decodes the response and saves tags via Java bridge',async()=>{
   const bills=Array.from({length:5},(_,i)=>({i:i+1,k:25,n:'הצעת חוק '+String(i+1),t:'פרטית'}));
   let capturedId,capturedKey,capturedJson;
+  const ng=androidGeminiTags();
   const h=app({
     android:{
       shareText(){},
-      httpGemini(id,apiKey,json){capturedId=id;capturedKey=apiKey;capturedJson=json}
+      httpGemini(id,apiKey,json){capturedId=id;capturedKey=apiKey;capturedJson=json},
+      ...ng.api
     },
     storage:{[BKEY]:{knesset:25,rows:bills,nextSkip:600,done:true,loadedAt:'2024-01-01T00:00:00Z'},'mk-promises-gemini-key-v1':'native-key'}
   });
@@ -496,7 +503,8 @@ test('Gemini native bridge decodes the response and resolves the promise',async(
   const b64=Buffer.from(body).toString('base64');
   h.window.__geminiDone(capturedId,true,200,b64);
   await h.settle();
-  const tags=h.written(GTKEY);
+  assert.ok(ng.calls.saves.length>=1);
+  const tags=JSON.parse(ng.calls.saves[ng.calls.saves.length-1]);
   assert.equal(tags['1'],'ביטחון');
   assert.equal(tags['5'],'ביטחון');
 });
