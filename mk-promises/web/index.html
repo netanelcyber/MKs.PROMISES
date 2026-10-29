@@ -1242,9 +1242,32 @@ function downloadBackup(text){
   a.href=url;a.download='mk-promises.json';document.body.appendChild(a);a.click();a.remove();
   setTimeout(function(){URL.revokeObjectURL(url)},1000);
 }
+/* Manual labels for ml/train.py: every piece of evidence you attached with a chosen effect becomes one labelled pair. */
+function labelRows(state,knesset){
+  var rows=[];
+  state.mks.forEach(function(m){
+    if(knesset&&String(m.knesset)!==String(knesset))return;
+    m.promises.forEach(function(p){
+      (p.evidence||[]).forEach(function(e){
+        if(e.effect!=='support'&&e.effect!=='contradict'&&e.effect!=='context')return;
+        var text=e.excerpt||e.title;if(!text||!p.text)return;
+        rows.push({promise:p.text,utterance:text,label:e.effect,group:m.name,source:e.url||''});
+      });
+    });
+  });
+  return rows;
+}
+function shareOut(t){
+  if(window.Android&&window.Android.shareText)window.Android.shareText(t);
+  else if(navigator.share){try{navigator.share({title:'מעקב הבטחות',text:t}).catch(function(e){if(e.name!=='AbortError')downloadBackup(t)})}catch(e){downloadBackup(t)}}
+  else downloadBackup(t);
+}
 function menu(){
-  ask('גיבוי ושחזור',[{k:'act',label:'פעולה',type:'select',options:[['export','ייצוא / שיתוף הנתונים'],['import','ייבוא מקובץ JSON שהודבק'],['wipe','מחיקת כל הנתונים']]}],'המשך').then(function(o){
+  ask('גיבוי ושחזור',[{k:'act',label:'פעולה',type:'select',options:[['export','ייצוא / שיתוף הנתונים'],['labels','ייצוא תיוגים לאימון המודל (הכנסת ה-25)'],['import','ייבוא מקובץ JSON שהודבק'],['wipe','מחיקת כל הנתונים']]}],'המשך').then(function(o){
     if(!o)return;
+    if(o.act==='labels'){var rows=labelRows(S,25);
+      if(!rows.length){toast('אין עדיין ראיות מתויגות של חברי הכנסת ה-25');return}
+      shareOut(rows.map(function(r){return JSON.stringify(r)}).join('\n'));toast('יוצאו '+rows.length+' תיוגים');return}
     if(o.act==='export'){var t=recoveryBackup!==null?recoveryBackup:JSON.stringify(S,null,2);
       if(window.Android&&window.Android.shareText)window.Android.shareText(t);
       else if(navigator.share){try{navigator.share({title:'מעקב הבטחות',text:t}).catch(function(e){if(e.name!=='AbortError')downloadBackup(t)})}catch(e){downloadBackup(t)}}

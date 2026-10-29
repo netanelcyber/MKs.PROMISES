@@ -40,3 +40,13 @@ test('mrChoose and suggestStance exist and the page script parses',()=>{
   const scripts=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
   scripts.forEach(code=>new vm.Script(code));
 });
+
+test('labelRows exports labelled evidence of the 25th Knesset only',()=>{
+  const c={};vm.createContext(c);
+  const a=html.indexOf('function labelRows'),b=html.indexOf('function shareOut');
+  vm.runInContext(html.slice(a,b),c);
+  const st={mks:[
+    {name:'א',knesset:'25',promises:[{text:'הבטחה',evidence:[{title:'כתבה',effect:'support',url:'https://x'},{title:'',effect:'context'},{title:'t',effect:'bogus'}]}]},
+    {name:'ב',knesset:'24',promises:[{text:'הבטחה',evidence:[{title:'כתבה',effect:'contradict'}]}]}]};
+  assert.deepEqual(clone(c.labelRows(st,25)),[{promise:'הבטחה',utterance:'כתבה',label:'support',group:'א',source:'https://x'}]);
+});

@@ -101,3 +101,6 @@ node --test mk-promises/tests/*.test.cjs
 
 ### מודל בתוך האפליקציה
 `python ml/export_js.py --checkpoint run1/model.pt --out stance-model.json` (רק `--encoder hashed`; מומלץ לאמן עם `--buckets 16384` לקובץ קטן). באפליקציה, בעמוד חבר כנסת: "טעינת מודל" ובחירת הקובץ (נשמר במכשיר). אחר כך בייבוא ממקור ראשון מופיעה ליד כל כתבה הצעת תווית (תומך/סותר, מעל 60%) מול ההבטחה המתאימה. הצעה בלבד: לא משנה סטטוס ולא נבחרת אוטומטית. מודל LLM מלא (`--encoder hf`) לא רץ בטלפון. הבדיקה `tests/stance-model.test.cjs` משווה את ה-JS ל-PyTorch (הפרש < 1e-4). מודל שאומן על נתונים סינתטיים בלבד מסומן ככזה בהודעת הטעינה.
+
+### תיוג ידני והאימון
+בכל ראיה שאתה משייך לבחור "השפעה" (תומך/סותר/הקשר) זה התיוג. תפריט הגיבוי → "ייצוא תיוגים לאימון המודל (הכנסת ה-25)" מוציא JSONL (`promise, utterance, label, group`) רק מחברי הכנסת ה-25. אימון: `python ml/train.py --data labels.jsonl --encoder hashed --buckets 16384 --out run1`, ואז `export_js.py`.
