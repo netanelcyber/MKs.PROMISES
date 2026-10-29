@@ -27,6 +27,8 @@ final class GeminiLabel {
     private static final String HOST = "generativelanguage.googleapis.com";
     private static final String FILE = "gemini-labels.json";
     private static final int BATCH = 10;
+    /** Gemini labels only this many pairs; after that the local model continues alone. */
+    static final int FIRST_STEP = 20;
 
     private GeminiLabel() {
     }
@@ -38,26 +40,19 @@ final class GeminiLabel {
     static void start(MainActivity app) {
         SharedPreferences p = prefs(app);
         List<Ui.Field> f = new ArrayList<>();
-        f.add(new Ui.Field("key", "מפתח Gemini API (נשמר רק במכשיר)", Ui.TEXT).value(p.getString("key", "")).required());
+        f.add(new Ui.Field("key", "מפתח Gemini API (נשמר רק במכשיר)", Ui.TEXT).required());
         f.add(new Ui.Field("model", "דגם", Ui.TEXT).value(p.getString("model", "gemini-2.5-flash")).required());
-        f.add(new Ui.Field("n", "כמה זוגות (הבטחה, הצעת חוק) לתייג", Ui.NUMBER).value("100").required());
         Ui.form(app, "תיוג עם Gemini",
-                "נשלחים ל-Google רק נוסח ההבטחה ושם הצעת החוק. המפתח הוא שלך והשימוש נספר בחשבונך. התיוג של Gemini אינו אמת: זהו אות לאימון, ואינו משנה סטטוס.",
+                "שלב ראשון: Gemini מתייג רק 20 זוגות ואז מתנתק (המפתח לא נשמר), והמודל המקומי ממשיך לתייג ולהתאמן לבד. נשלחים ל-Google רק נוסח ההבטחה ושם הצעת החוק. המפתח הוא שלך והשימוש נספר בחשבונך. התיוג של Gemini אינו אמת: זהו אות לאימון, ואינו משנה סטטוס.",
                 f, "תיוג ואימון", v -> {
-                    int n;
-                    try {
-                        n = Math.max(10, Math.min(1000, Integer.parseInt(v.get("n"))));
-                    } catch (NumberFormatException e) {
-                        Ui.toast(app, "מספר לא תקין");
-                        return;
-                    }
+                    final int n = FIRST_STEP;
                     final String key = v.get("key").trim();
                     final String model = v.get("model").trim();
                     if (!model.matches("[A-Za-z0-9._-]{3,60}")) {
                         Ui.toast(app, "שם דגם לא תקין");
                         return;
                     }
-                    p.edit().putString("key", key).putString("model", model).apply();
+                    p.edit().putString("model", model).remove("key").apply();   // the key is never kept: Gemini is used for this first step only
                     run(app, key, model, n);
                 });
     }
@@ -94,7 +89,7 @@ final class GeminiLabel {
             }
             return added;
         }, added -> {
-            Ui.toast(app, "Gemini תייג " + added + " זוגות חדשים. מאמן…");
+            Ui.toast(app, "Gemini תייג " + added + " זוגות ונותק. המודל ממשיך לבד…");
             AutoTrain.run(app);
         }, e -> Ui.toastLong(app, "התיוג נכשל: " + MainActivity.message(e)));
     }

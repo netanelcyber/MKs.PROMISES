@@ -21,6 +21,7 @@ final class AutoTrain {
 
     private static final int KNESSET = 25;
     private static final int MAX_WEAK = 4000;
+    private static final int SELF_PAIRS = 600;
 
     private AutoTrain() {
     }
@@ -46,8 +47,29 @@ final class AutoTrain {
             }
             Stance.Result r = Stance.train(rows, 25, (epoch, loss, acc) ->
                     app.runOnUiThread(() -> Ui.toast(app, "סבב " + epoch + " · דיוק " + Math.round(acc * 100) + "%")), 1L);
+            // Self-training: the model labels more bill pairs by itself and keeps only confident ones.
+            int pseudo = 0;
+            List<String[]> more = candidates(app.store.mks(), bills, SELF_PAIRS, new HashSet<String>());
+            List<Stance.Row> extra = new ArrayList<>(rows);
+            for (String[] c : more) {
+                float[] pr = Stance.score(r.model, c[1], c[2]);
+                int best = 0;
+                for (int i = 1; i < 3; i++) {
+                    if (pr[i] > pr[best]) {
+                        best = i;
+                    }
+                }
+                if (pr[best] >= 0.9f) {
+                    extra.add(new Stance.Row(c[1], c[2], best, c[3]));
+                    pseudo++;
+                }
+            }
+            if (pseudo >= 20) {
+                r = Stance.train(extra, 25, (epoch, loss, acc) ->
+                        app.runOnUiThread(() -> Ui.toast(app, "סבב עצמי " + epoch + " · דיוק " + Math.round(acc * 100) + "%")), 2L);
+            }
             Stance.set(app, r.model);
-            return new Object[]{r, rows.size(), weak[0], seen[1]};
+            return new Object[]{r, rows.size() + pseudo, weak[0], seen[1]};
         }, out -> {
             Stance.Result r = (Stance.Result) out[0];
             Ui.toastLong(app, "המודל אומן ופעיל: " + out[1] + " דוגמאות (" + out[2] + " מהן חלשות מהצעות חוק, "
